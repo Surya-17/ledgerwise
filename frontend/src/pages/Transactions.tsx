@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ChevronDown, FileText, Search, Tag, Undo2 } from 'lucide-react'
+import { ChevronDown, Download, FileText, Search, Tag, Undo2 } from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { EntryIcon } from '../components/EntryIcon'
@@ -44,6 +44,19 @@ export default function Transactions() {
     getNextPageParam: (last, all) => (last.length === PAGE ? all.length * PAGE : undefined),
   })
   const entries = useMemo(() => list.data?.pages.flat() ?? [], [list.data])
+  const toast = useToast()
+  const exportCsv = useMutation({
+    mutationFn: () => api.exportEntries({ q: query, account_id: accountId }),
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `ledgerwise-journal-${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    },
+    onError: (e) => toast((e as Error).message, 'critical'),
+  })
 
   const groups = useMemo(() => {
     const out: { date: string; items: Entry[] }[] = []
@@ -62,6 +75,11 @@ export default function Transactions() {
       <PageHeader
         title="Transactions"
         description="Every entry in your ledger. History is append-only; corrections post reversing entries."
+        actions={
+          <Button variant="secondary" icon={<Download className="size-4" />} onClick={() => exportCsv.mutate()} loading={exportCsv.isPending}>
+            Export CSV
+          </Button>
+        }
       />
       <Card>
         <div className="flex flex-col gap-2 border-b border-line p-3 sm:flex-row">

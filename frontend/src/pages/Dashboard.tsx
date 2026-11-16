@@ -11,7 +11,7 @@ import { api } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { describeEntry } from '../lib/entries'
 import { isBalanceAccount, useAccounts } from '../lib/hooks'
-import { currentMonth, formatDate, formatMoney, monthLabel } from '../lib/money'
+import { currentMonth, formatDate, formatMoney, monthLabel, shiftDays, todayISO } from '../lib/money'
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -25,6 +25,12 @@ export default function Dashboard() {
   const cashFlow = useQuery({ queryKey: ['cash-flow', 6], queryFn: () => api.cashFlow(6) })
   const spending = useQuery({ queryKey: ['spending', month], queryFn: () => api.spending(month) })
   const budgets = useQuery({ queryKey: ['budgets', month], queryFn: () => api.budgets(month) })
+  const recurring = useQuery({ queryKey: ['recurring'], queryFn: api.recurring })
+  const horizon = shiftDays(todayISO(), 14)
+  const upcomingBills = (recurring.data ?? [])
+    .filter((r) => r.status === 'active' && r.next_date >= todayISO() && r.next_date <= horizon)
+    .sort((a, b) => a.next_date.localeCompare(b.next_date))
+    .slice(0, 5)
   const recent = useQuery({ queryKey: ['entries', 'recent'], queryFn: () => api.entries({ limit: 6 }) })
 
   const nw = netWorth.data ?? []
@@ -103,7 +109,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader
             title="Net worth"
@@ -152,7 +158,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader title="Cash flow" subtitle="Income and spending, last 6 months" />
           <div className="px-3 pb-4">
@@ -173,7 +179,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader title="Recent transactions" action={<SeeAll to="/transactions" />} />
           <ul className="divide-y divide-line px-2 pb-2">
@@ -208,26 +214,52 @@ export default function Dashboard() {
                 })}
           </ul>
         </Card>
-        <Card>
-          <CardHeader title="Accounts" action={<SeeAll to="/accounts" />} />
-          <ul className="px-2 pb-3">
-            {(accounts.data ?? [])
-              .filter((a) => isBalanceAccount(a) && !a.is_archived)
-              .map((a) => (
-                <li key={a.id} className="flex items-center justify-between rounded-lg px-3 py-2.5">
-                  <div>
-                    <div className="text-sm font-medium">{a.name}</div>
-                    <div className="text-xs text-ink-3 capitalize">{a.type === 'liability' ? 'Credit / loan' : 'Cash'}</div>
-                  </div>
-                  <Money
-                    minor={a.type === 'liability' ? -a.balance_minor : a.balance_minor}
-                    currency={a.currency}
-                    className="text-sm font-medium"
-                  />
-                </li>
-              ))}
-          </ul>
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader title="Accounts" action={<SeeAll to="/accounts" />} />
+            <ul className="px-2 pb-3">
+              {(accounts.data ?? [])
+                .filter((a) => isBalanceAccount(a) && !a.is_archived)
+                .map((a) => (
+                  <li key={a.id} className="flex items-center justify-between rounded-lg px-3 py-2.5">
+                    <div>
+                      <div className="text-sm font-medium">{a.name}</div>
+                      <div className="text-xs text-ink-3 capitalize">{a.type === 'liability' ? 'Credit / loan' : 'Cash'}</div>
+                    </div>
+                    <Money
+                      minor={a.type === 'liability' ? -a.balance_minor : a.balance_minor}
+                      currency={a.currency}
+                      className="text-sm font-medium"
+                    />
+                  </li>
+                ))}
+            </ul>
+          </Card>
+          <Card>
+            <CardHeader title="Upcoming" subtitle="Recurring bills and income, next 14 days" action={<SeeAll to="/recurring" />} />
+            <ul className="px-2 pb-3">
+              {upcomingBills.length === 0 ? (
+                <li className="px-3 pb-3 text-sm text-ink-3">{recurring.isPending ? 'Loading…' : 'Nothing due soon.'}</li>
+              ) : (
+                upcomingBills.map((s) => (
+                  <li key={s.key + s.direction} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{s.name}</div>
+                      <div className="text-xs text-ink-3">{formatDate(s.next_date)}</div>
+                    </div>
+                    <Money
+                      minor={s.direction === 'in' ? s.amount_minor : -s.amount_minor}
+                      currency={s.currency}
+                      signed
+                      tone
+                      className="text-sm font-medium"
+                    />
+                  </li>
+                ))
+              )}
+            </ul>
+          </Card>
+        </div>
       </div>
     </div>
   )

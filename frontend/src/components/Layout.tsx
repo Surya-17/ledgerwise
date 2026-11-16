@@ -5,14 +5,16 @@ import {
   History,
   LayoutDashboard,
   LogOut,
+  MoreHorizontal,
   Moon,
   PiggyBank,
   Plus,
+  Repeat,
   Sun,
   Wallet,
 } from 'lucide-react'
 import { useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useTheme } from '../lib/hooks'
 import { Logo } from './Logo'
@@ -24,14 +26,20 @@ const NAV = [
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/accounts', label: 'Accounts', icon: Wallet },
   { to: '/budgets', label: 'Budgets', icon: PiggyBank },
+  { to: '/recurring', label: 'Recurring', icon: Repeat },
   { to: '/import', label: 'Import', icon: FileUp },
   { to: '/activity', label: 'Audit log', icon: History },
 ]
+
+// Mobile: Overview, Transactions, [+], Budgets, More (the rest).
+const MORE = NAV.filter((n) => !['/', '/transactions', '/budgets'].includes(n.to))
 
 export function Layout() {
   const { user, isDemo, signOut } = useAuth()
   const { theme, toggle } = useTheme()
   const [adding, setAdding] = useState(false)
+  const [more, setMore] = useState(false)
+  const { pathname } = useLocation()
 
   return (
     <div className="min-h-dvh lg:pl-60">
@@ -131,10 +139,46 @@ export function Layout() {
             <Plus className="size-5" />
           </span>
         </button>
-        {NAV.slice(2, 4).map((n) => (
-          <TabLink key={n.to} {...n} />
-        ))}
+        <TabLink {...NAV[3]} />
+        <button
+          onClick={() => setMore((m) => !m)}
+          className={clsx(
+            'flex flex-col items-center gap-0.5 py-2 text-[10px] font-medium',
+            more || MORE.some((n) => pathname.startsWith(n.to)) ? 'text-brand' : 'text-ink-3',
+          )}
+          aria-expanded={more}
+          aria-label="More pages"
+        >
+          <MoreHorizontal className="size-5" strokeWidth={1.8} />
+          More
+        </button>
       </nav>
+
+      {more && (
+        <div className="fixed inset-0 z-20 lg:hidden" onClick={() => setMore(false)}>
+          <div
+            className="animate-in absolute inset-x-3 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] rounded-2xl border border-line bg-surface p-2 shadow-pop"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {MORE.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                onClick={() => setMore(false)}
+                className={({ isActive }) =>
+                  clsx(
+                    'flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium',
+                    isActive ? 'bg-brand-soft text-brand' : 'text-ink-2 hover:bg-surface-hover',
+                  )
+                }
+              >
+                <Icon className="size-[18px]" strokeWidth={1.8} />
+                {label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      )}
 
       <NewTransactionModal open={adding} onClose={() => setAdding(false)} />
     </div>

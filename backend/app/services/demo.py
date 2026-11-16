@@ -54,6 +54,7 @@ def populate_demo_data(db: Session, user: User) -> None:
     checking = new("Checking", AccountType.ASSET, 4_250_00)
     savings = new("High-Yield Savings", AccountType.ASSET, 12_000_00)
     card = new("Visa Card", AccountType.LIABILITY, 480_00)
+    new("Subscriptions", AccountType.EXPENSE)
     acct = {a.name: a for a, _ in reports.account_balances(db, user)}
 
     def post(on: date, description: str, debit, credit, cents: int) -> None:
@@ -91,11 +92,25 @@ def populate_demo_data(db: Session, user: User) -> None:
             )
         if d.day == 20:
             post(d, "Visa card payment", card, checking, rng.randint(700_00, 1_100_00))
+        # Subscriptions on the card, for recurring detection. The gym membership
+        # stops two months ago, so the demo shows a lapsed subscription too.
+        if d.day == 8:
+            card_statement.append(f"{d},NETFLIX.COM 866-579-7172,15.49")
+        if d.day == 12:
+            card_statement.append(f"{d},Spotify USA,11.99")
+        if d.day == 3 and d < reports.add_months(reports.month_start(today), -1):
+            card_statement.append(f"{d},PLANET FITNESS #0421,24.99")
 
     # Categorization rules, then import the card statement like a user would.
     # Shopping has no rule on purpose: those rows land in Uncategorized Expense,
     # so the demo shows recategorization (reverse + repost) in action.
-    for pattern, name in [("whole foods", "Groceries"), *[(n, "Dining") for n in DINING]]:
+    subscriptions = [("netflix", "Subscriptions"), ("spotify", "Subscriptions")]
+    subscriptions.append(("planet fitness", "Subscriptions"))
+    for pattern, name in [
+        ("whole foods", "Groceries"),
+        *[(n, "Dining") for n in DINING],
+        *subscriptions,
+    ]:
         db.add(CategoryRule(user_id=user.id, pattern=pattern, account_id=acct[name].id))
     db.flush()
     imports.import_csv(

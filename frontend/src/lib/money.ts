@@ -80,3 +80,9 @@ export function shiftMonth(month: string, delta: number): string {
   const idx = y * 12 + (m - 1) + delta
   return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`
 }
+
+export function shiftDays(iso: string, days: number): string {
+  const [y, mo, d] = iso.split('-').map(Number)
+  const t = new Date(Date.UTC(y, mo - 1, d + days))
+  return t.toISOString().slice(0, 10)
+}

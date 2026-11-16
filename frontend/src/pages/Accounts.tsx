@@ -82,7 +82,7 @@ export default function Accounts() {
         ))}
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-2">
         {SECTIONS.map(({ type, title, subtitle, icon: Icon }) => {
           const rows = visible.filter((a) => a.type === type)
           return (

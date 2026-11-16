@@ -156,6 +156,7 @@ class ImportOut(ORM):
     imported_count: int
     duplicate_count: int
     skipped_count: int
+    transfer_count: int = 0
     created_at: datetime
 
 
@@ -215,6 +216,25 @@ class CategorySpendOut(BaseModel):
     account_name: str
     currency: str
     spent_minor: int
+
+
+class RecurringOut(BaseModel):
+    key: str
+    name: str
+    direction: str
+    category_id: str
+    category_name: str
+    currency: str
+    cadence: str
+    period_days: int
+    amount_minor: int
+    fixed_amount: bool
+    occurrences: int
+    first_date: date
+    last_date: date
+    next_date: date
+    status: str
+    monthly_minor: int
 
 
 class AuditEventOut(ORM):

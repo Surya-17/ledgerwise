@@ -45,6 +45,7 @@ def test_import_posts_rows_and_reimport_is_idempotent(client: TestClient, auth: 
         "imported_count": 4,  # both identical coffees kept
         "duplicate_count": 0,
         "skipped_count": 1,  # the $0.00 hold
+        "transfer_count": 0,
     }
 
     again = _upload(client, auth, checking["id"], STATEMENT).json()

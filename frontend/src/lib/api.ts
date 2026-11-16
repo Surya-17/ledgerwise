@@ -8,6 +8,7 @@ import type {
   Entry,
   ImportBatch,
   NetWorthPoint,
+  RecurringSeries,
   Rule,
   User,
 } from './types'
@@ -149,6 +150,16 @@ export const api = {
       idempotencyKey,
     }),
 
+  /** Journal CSV for the current filters; fetched with auth, saved as a file by the caller. */
+  exportEntries: async (p: { account_id?: string; q?: string }): Promise<Blob> => {
+    const token = tokenStore.get()
+    const res = await fetch(`${BASE}/api/entries/export${qs(p)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) throw new ApiError(res.status, `Export failed (${res.status})`, null)
+    return res.blob()
+  },
+
   // imports & rules
   imports: () => request<ImportBatch[]>('/imports'),
   uploadStatement: (form: FormData) => request<ImportBatch>('/imports', { method: 'POST', form }),
@@ -165,5 +176,6 @@ export const api = {
   cashFlow: (months = 6) => request<CashFlowPoint[]>(`/reports/cash-flow${qs({ months })}`),
   netWorth: (months = 6) => request<NetWorthPoint[]>(`/reports/net-worth${qs({ months })}`),
   spending: (month: string) => request<CategorySpend[]>(`/reports/spending${qs({ month: `${month}-01` })}`),
+  recurring: () => request<RecurringSeries[]>('/reports/recurring'),
   audit: (limit = 100, offset = 0) => request<AuditEvent[]>(`/audit${qs({ limit, offset })}`),
 }

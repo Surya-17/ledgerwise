@@ -6,6 +6,8 @@ Guarantees:
     statement skips rows already in the ledger (enforced by a unique constraint).
   * Two genuinely identical rows (two $4.50 coffees on the same day) are kept distinct
     by an occurrence counter in the fingerprint.
+  * Transfer-aware — a row that mirrors an uncategorized import from another of the
+    user's accounts is merged into a single transfer instead of counting twice.
 """
 
 from __future__ import annotations
@@ -16,10 +18,10 @@ import io
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app import audit
 from app.errors import LedgerError
@@ -147,6 +149,133 @@ def _match_rule(rules: list[tuple[CategoryRule, Account]], description: str) -> 
     return None
 
 
+# --- Transfer matching --------------------------------------------------------------------
+#
+# Importing both sides of a transfer (checking shows -500, savings shows +500) would
+# otherwise post two entries: checking -> Uncategorized Expense and Uncategorized
+# Income -> savings. Income and spending would both be overstated by $500.
+#
+# When a new row is the mirror image of an earlier *uncategorized* import in another
+# money account, within a few days, we reverse that earlier entry and post one
+# transfer between the two accounts instead. History stays append-only, the earlier
+# entry keeps its fingerprint (so re-importing either statement still dedupes), and
+# the new transfer carries this row's fingerprint.
+
+TRANSFER_WINDOW_DAYS = 3
+
+
+@dataclass(frozen=True)
+class TransferCandidate:
+    entry: JournalEntry
+    other_account_id: uuid.UUID  # the money account on the earlier statement
+    other_amount_minor: int  # that account's line, e.g. -500 for money leaving
+
+
+def _transfer_candidates(
+    db: Session, user: User, account: Account, rows: list[ParsedRow]
+) -> list[TransferCandidate]:
+    if not rows:
+        return []
+    start = min(r.occurred_on for r in rows) - timedelta(days=TRANSFER_WINDOW_DAYS)
+    end = max(r.occurred_on for r in rows) + timedelta(days=TRANSFER_WINDOW_DAYS)
+    uncategorized = {
+        a.id
+        for a in db.scalars(
+            select(Account).where(
+                Account.user_id == user.id,
+                Account.currency == account.currency,
+                # Non-base currencies get suffixed names, e.g. "Uncategorized Expense (EUR)".
+                or_(
+                    Account.name.startswith(ledger.UNCATEGORIZED_INCOME),
+                    Account.name.startswith(ledger.UNCATEGORIZED_EXPENSE),
+                ),
+            )
+        )
+    }
+    reversed_ids = select(JournalEntry.reverses_id).where(
+        JournalEntry.user_id == user.id, JournalEntry.reverses_id.is_not(None)
+    )
+    entries = db.scalars(
+        select(JournalEntry)
+        .options(selectinload(JournalEntry.lines))
+        .where(
+            JournalEntry.user_id == user.id,
+            JournalEntry.source == EntrySource.IMPORT,
+            JournalEntry.occurred_on.between(start, end),
+            JournalEntry.id.not_in(reversed_ids),
+        )
+        .order_by(JournalEntry.occurred_on, JournalEntry.created_at)
+    ).all()
+    money_ids = {
+        a.id
+        for a in db.scalars(
+            select(Account).where(
+                Account.user_id == user.id,
+                Account.currency == account.currency,
+                Account.type.in_([AccountType.ASSET, AccountType.LIABILITY]),
+                Account.id != account.id,
+            )
+        )
+    }
+    out = []
+    for e in entries:
+        if len(e.lines) != 2:
+            continue
+        money = [ln for ln in e.lines if ln.account_id in money_ids]
+        other = [ln for ln in e.lines if ln.account_id in uncategorized]
+        if len(money) == 1 and len(other) == 1:
+            out.append(TransferCandidate(e, money[0].account_id, money[0].amount_minor))
+    return out
+
+
+def _pick_transfer(
+    candidates: list[TransferCandidate],
+    row: ParsedRow,
+    claimed: set[uuid.UUID],
+    account_id: uuid.UUID,
+) -> TransferCandidate | None:
+    """Closest-dated unclaimed mirror image of this row, if any."""
+    best: TransferCandidate | None = None
+    for c in candidates:
+        if c.entry.id in claimed or c.other_account_id == account_id:
+            continue
+        if c.other_amount_minor != -row.amount_minor:
+            continue
+        gap = abs((c.entry.occurred_on - row.occurred_on).days)
+        if gap > TRANSFER_WINDOW_DAYS:
+            continue
+        if best is None or gap < abs((best.entry.occurred_on - row.occurred_on).days):
+            best = c
+    return best
+
+
+def _merge_transfer(
+    db: Session,
+    user: User,
+    account: Account,
+    row: ParsedRow,
+    fingerprint: str,
+    batch: ImportBatch,
+    match: TransferCandidate,
+) -> None:
+    ledger.reverse_entry(db, user, match.entry.id, reason="matched as transfer")
+    ledger.post_entry(
+        db,
+        user,
+        # The earlier side's date: money left one account before it landed in the other.
+        occurred_on=min(row.occurred_on, match.entry.occurred_on),
+        description=row.description,
+        lines=[
+            ledger.LineInput(account.id, row.amount_minor),
+            ledger.LineInput(match.other_account_id, match.other_amount_minor),
+        ],
+        source=EntrySource.IMPORT,
+        import_batch_id=batch.id,
+        import_fingerprint=fingerprint,
+        record_audit=False,
+    )
+
+
 def import_csv(
     db: Session,
     user: User,
@@ -222,13 +351,24 @@ def import_csv(
         db, user, AccountType.EXPENSE, ledger.UNCATEGORIZED_EXPENSE, account.currency
     )
 
-    imported = 0
+    candidates = _transfer_candidates(
+        db, user, account, [row for row, fp in fingerprinted if fp not in existing]
+    )
+    claimed: set[uuid.UUID] = set()
+
+    imported = transfers = 0
     for row, fp in fingerprinted:
         if fp in existing:
             continue
-        category = _match_rule(rules, row.description) or (
-            fallback_income if row.amount_minor > 0 else fallback_expense
-        )
+        rule_category = _match_rule(rules, row.description)
+        match = None if rule_category else _pick_transfer(candidates, row, claimed, account.id)
+        if match is not None:
+            _merge_transfer(db, user, account, row, fp, batch, match)
+            claimed.add(match.entry.id)
+            imported += 1
+            transfers += 1
+            continue
+        category = rule_category or (fallback_income if row.amount_minor > 0 else fallback_expense)
         ledger.post_entry(
             db,
             user,
@@ -247,6 +387,7 @@ def import_csv(
 
     batch.imported_count = imported
     batch.duplicate_count = len(fingerprinted) - imported
+    batch.transfer_count = transfers
     audit.record(
         db,
         user.id,
@@ -260,6 +401,7 @@ def import_csv(
             "imported": imported,
             "duplicates": batch.duplicate_count,
             "skipped": skipped,
+            "transfers_matched": transfers,
         },
     )
     db.flush()

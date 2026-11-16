@@ -12,8 +12,10 @@ from app.schemas import (
     CategorySpendOut,
     Currency,
     NetWorthPointOut,
+    RecurringOut,
 )
 from app.services import reports
+from app.services.recurring import RecurringSeries, detect_recurring
 
 router = APIRouter(tags=["reports"])
 
@@ -48,6 +50,12 @@ def net_worth(
 @router.get("/reports/spending", response_model=list[CategorySpendOut])
 def spending(db: DB, user: CurrentUser, month: date | None = None) -> list[reports.CategorySpend]:
     return reports.spending_by_category(db, user, month=month or date.today())
+
+
+@router.get("/reports/recurring", response_model=list[RecurringOut])
+def recurring(db: DB, user: CurrentUser) -> list[RecurringSeries]:
+    """Subscriptions, bills and paychecks detected from the last ~13 months of entries."""
+    return detect_recurring(db, user)
 
 
 @router.get("/audit", response_model=list[AuditEventOut])

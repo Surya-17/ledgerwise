@@ -1,14 +1,17 @@
+import csv
+import io
 import uuid
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.orm import selectinload
 
 from app.deps import DB, CurrentUser, IdempotencyKey
-from app.models import JournalEntry, JournalLine
+from app.models import Account, JournalEntry, JournalLine
+from app.money import format_minor
 from app.schemas import EntryCreate, EntryOut, RecategorizeRequest, ReverseRequest
 from app.services import ledger
 from app.services.idempotency import run_idempotent
@@ -28,6 +31,35 @@ def _escape_like(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _filtered(
+    user_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    start: date | None,
+    end: date | None,
+    q: str | None,
+) -> Select[tuple[JournalEntry]]:
+    stmt = (
+        select(JournalEntry)
+        .options(selectinload(JournalEntry.lines))
+        .where(JournalEntry.user_id == user_id)
+    )
+    if account_id:
+        stmt = stmt.where(
+            JournalEntry.id.in_(
+                select(JournalLine.entry_id).where(
+                    JournalLine.user_id == user_id, JournalLine.account_id == account_id
+                )
+            )
+        )
+    if start:
+        stmt = stmt.where(JournalEntry.occurred_on >= start)
+    if end:
+        stmt = stmt.where(JournalEntry.occurred_on <= end)
+    if q:
+        stmt = stmt.where(JournalEntry.description.ilike(f"%{_escape_like(q)}%", escape="\\"))
+    return stmt
+
+
 @router.get("", response_model=list[EntryOut])
 def list_entries(
     db: DB,
@@ -39,25 +71,7 @@ def list_entries(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[dict[str, Any]]:
-    stmt = (
-        select(JournalEntry)
-        .options(selectinload(JournalEntry.lines))
-        .where(JournalEntry.user_id == user.id)
-    )
-    if account_id:
-        stmt = stmt.where(
-            JournalEntry.id.in_(
-                select(JournalLine.entry_id).where(
-                    JournalLine.user_id == user.id, JournalLine.account_id == account_id
-                )
-            )
-        )
-    if start:
-        stmt = stmt.where(JournalEntry.occurred_on >= start)
-    if end:
-        stmt = stmt.where(JournalEntry.occurred_on <= end)
-    if q:
-        stmt = stmt.where(JournalEntry.description.ilike(f"%{_escape_like(q)}%", escape="\\"))
+    stmt = _filtered(user.id, account_id, start, end, q)
     stmt = (
         stmt.order_by(
             JournalEntry.occurred_on.desc(), JournalEntry.created_at.desc(), JournalEntry.id
@@ -75,6 +89,68 @@ def list_entries(
         )
     )
     return [_dump(e, e.id in reversed_ids) for e in entries]
+
+
+EXPORT_MAX_ENTRIES = 50_000
+
+
+@router.get("/export", response_class=Response, responses={200: {"content": {"text/csv": {}}}})
+def export_entries(
+    db: DB,
+    user: CurrentUser,
+    account_id: uuid.UUID | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+) -> Response:
+    """Journal export: one row per line, debits and credits in separate columns.
+
+    Amounts are written from integer minor units with exact decimal formatting, so the
+    file sums to zero per entry exactly as the ledger does. Cells that a spreadsheet
+    would treat as formulas are neutralized (CSV injection).
+    """
+    names = {
+        acct_id: name
+        for acct_id, name in db.execute(
+            select(Account.id, Account.name).where(Account.user_id == user.id)
+        )
+    }
+    entries = db.scalars(
+        _filtered(user.id, account_id, start, end, q)
+        .order_by(JournalEntry.occurred_on, JournalEntry.created_at, JournalEntry.id)
+        .limit(EXPORT_MAX_ENTRIES)
+    ).all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(
+        ["date", "entry_id", "description", "source", "account", "debit", "credit", "currency"]
+    )
+    for e in entries:
+        for ln in sorted(e.lines, key=lambda x: x.line_no):
+            amount = format_minor(abs(ln.amount_minor), ln.currency)
+            writer.writerow(
+                [
+                    e.occurred_on.isoformat(),
+                    str(e.id),
+                    _safe_cell(e.description),
+                    e.source.value,
+                    _safe_cell(names.get(ln.account_id, "")),
+                    amount if ln.amount_minor > 0 else "",
+                    amount if ln.amount_minor < 0 else "",
+                    ln.currency,
+                ]
+            )
+    return Response(
+        buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ledgerwise-journal.csv"'},
+    )
+
+
+def _safe_cell(text: str) -> str:
+    # A leading =, +, - or @ makes Excel/Sheets evaluate the cell as a formula.
+    return f"'{text}" if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
 
 
 @router.get("/{entry_id}", response_model=EntryOut)

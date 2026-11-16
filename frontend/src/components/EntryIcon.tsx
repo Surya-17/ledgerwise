@@ -7,6 +7,7 @@ import {
   Home,
   Landmark,
   Receipt,
+  Repeat,
   ShoppingBag,
   ShoppingCart,
   Undo2,
@@ -23,6 +24,7 @@ const BY_CATEGORY: Record<string, LucideIcon> = {
   Transport: Bus,
   Utilities: Zap,
   Shopping: ShoppingBag,
+  Subscriptions: Repeat,
   'Opening Balance Equity': Landmark,
 }
 

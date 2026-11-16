@@ -46,6 +46,7 @@ export interface ImportBatch {
   imported_count: number
   duplicate_count: number
   skipped_count: number
+  transfer_count: number
   created_at: string
 }
 
@@ -92,4 +93,23 @@ export interface AuditEvent {
   entity_id: string
   details: Record<string, unknown>
   created_at: string
+}
+
+export interface RecurringSeries {
+  key: string
+  name: string
+  direction: 'in' | 'out'
+  category_id: string
+  category_name: string
+  currency: string
+  cadence: 'weekly' | 'biweekly' | 'semimonthly' | 'monthly' | 'quarterly' | 'yearly'
+  period_days: number
+  amount_minor: number
+  fixed_amount: boolean
+  occurrences: number
+  first_date: string
+  last_date: string
+  next_date: string
+  status: 'active' | 'lapsed'
+  monthly_minor: number
 }

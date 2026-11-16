@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { CheckCircle2, Copy, Download, FileSpreadsheet, Trash2, UploadCloud, Wand2 } from 'lucide-react'
+import { ArrowLeftRight, CheckCircle2, Copy, Download, FileSpreadsheet, Trash2, UploadCloud, Wand2 } from 'lucide-react'
 import { useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react'
 import { Badge, Button, Card, CardHeader, ErrorNote, Field, Input, PageHeader, Select, Skeleton, useToast } from '../components/ui'
 import { api } from '../lib/api'
@@ -150,10 +150,10 @@ export default function Import() {
     <div className="animate-in">
       <PageHeader
         title="Import a statement"
-        description="Upload a CSV export from your bank. Re-importing an overlapping statement is safe: rows already in the ledger are skipped by fingerprint."
+        description="Upload a CSV export from your bank. Overlapping statements are safe (rows are fingerprinted), and transfers between your own accounts are matched so they never count twice."
       />
 
-      <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <Card className="p-5">
           <form onSubmit={submit} className="space-y-5">
             <div
@@ -298,13 +298,20 @@ export default function Import() {
             )}
 
             {result && (
-              <div className="animate-in grid grid-cols-3 gap-2 rounded-xl border border-line bg-good-soft p-4">
-                <div className="col-span-3 mb-1 flex items-center gap-2 text-sm font-medium text-good-ink">
+              <div className="animate-in grid grid-cols-2 gap-3 rounded-xl border border-line bg-good-soft p-4 sm:grid-cols-4">
+                <div className="col-span-2 mb-1 flex items-center gap-2 text-sm font-medium text-good-ink sm:col-span-4">
                   <CheckCircle2 className="size-4" /> Import complete
                 </div>
                 <ResultStat label="New" value={result.imported_count} />
+                <ResultStat label="Matched as transfers" value={result.transfer_count} />
                 <ResultStat label="Already imported" value={result.duplicate_count} />
                 <ResultStat label="Skipped (zero)" value={result.skipped_count} />
+                {result.transfer_count > 0 && (
+                  <p className="col-span-2 text-xs text-ink-2 sm:col-span-4">
+                    These rows mirrored an earlier import from another of your accounts, so each pair was merged into a
+                    single transfer instead of counting as both income and spending.
+                  </p>
+                )}
               </div>
             )}
 
@@ -354,6 +361,12 @@ function History({ byId }: { byId: Map<string, { name: string }> }) {
               <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-ink-3">
                 <span>{byId.get(b.account_id)?.name}</span>
                 <span className="tnum">{b.imported_count} new</span>
+                {b.transfer_count > 0 && (
+                  <span className="tnum inline-flex items-center gap-1">
+                    <ArrowLeftRight className="size-3" />
+                    {b.transfer_count} transfers matched
+                  </span>
+                )}
                 {b.duplicate_count > 0 && (
                   <span className="tnum inline-flex items-center gap-1">
                     <Copy className="size-3" />
