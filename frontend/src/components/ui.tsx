@@ -210,7 +210,7 @@ export function Field({
 }: {
   label: string
   hint?: ReactNode
-  error?: string | null
+  error?: ReactNode
   children: ReactNode
   className?: string
 }) {

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { Check } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { api, newIdempotencyKey } from '../lib/api'
 import { isBalanceAccount, useAccounts } from '../lib/hooks'
 import { exponent, formatMoney, parseMoney, todayISO } from '../lib/money'
@@ -128,7 +129,8 @@ function SplitBillForm({
   const people = order.map((id) => {
     let exact: number | null = null
     try {
-      exact = exacts[id]?.trim() ? parseMoney(exacts[id], currency) : null
+      // A blank box means $0 for that person; only unreadable text is invalid.
+      exact = exacts[id]?.trim() ? parseMoney(exacts[id], currency) : 0
     } catch {
       exact = null
     }
@@ -144,7 +146,22 @@ function SplitBillForm({
   else if (effectivePayer === ME && friendsIn.length === 0) problem = 'Pick at least one friend to split with'
   else if (effectivePayer !== ME && myShare === 0)
     problem = 'You need a share in a bill a friend paid; otherwise it doesn’t touch your books'
+  const noMoneyAccount = effectivePayer === ME && money.length === 0
   const ready = preview.valid && !problem && !!description.trim() && !!category && (effectivePayer !== ME || !!paidFrom)
+  // Say why Save is disabled instead of leaving a mystery grey button.
+  const blocker = ready
+    ? null
+    : noMoneyAccount
+      ? null // explained under "Paid from"
+      : !description.trim()
+        ? 'Add a description'
+        : !total || totalError
+          ? 'Enter the bill total'
+          : method === 'exact' && preview.unassigned !== 0
+            ? 'Amounts need to add up to the total'
+            : !preview.valid
+              ? 'Check the amounts above'
+              : null
 
   const toggle = (id: string) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
@@ -237,8 +254,20 @@ function SplitBillForm({
               </Select>
             </Field>
             {effectivePayer === ME && (
-              <Field label="Paid from">
-                <Select value={paidFrom} onChange={(e) => setPaidFrom(e.target.value)}>
+              <Field
+                label="Paid from"
+                error={
+                  noMoneyAccount ? (
+                    <>
+                      No bank account or card yet.{' '}
+                      <Link to="/accounts" onClick={onClose} className="font-medium underline">
+                        Add one
+                      </Link>
+                    </>
+                  ) : null
+                }
+              >
+                <Select value={paidFrom} onChange={(e) => setPaidFrom(e.target.value)} disabled={noMoneyAccount}>
                   {money.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
@@ -327,12 +356,24 @@ function SplitBillForm({
                 )
               })}
             </ul>
-            {method === 'exact' && total && preview.unassigned !== 0 && (
-              <p className="mt-1.5 text-xs text-critical-ink">
-                {preview.unassigned > 0
-                  ? `${formatMoney(preview.unassigned, currency)} left to assign`
-                  : `${formatMoney(-preview.unassigned, currency)} over the total`}
-              </p>
+            {method === 'exact' && !!total && !totalError && (
+              <div
+                className={clsx(
+                  'mt-2 flex items-center justify-between rounded-lg px-3 py-2 text-[13px]',
+                  preview.unassigned === 0 ? 'bg-good-soft text-good-ink' : 'bg-critical-soft text-critical-ink',
+                )}
+                role="status"
+              >
+                <span className="tnum">
+                  {formatMoney(total - preview.unassigned, currency)} of {formatMoney(total, currency)} assigned
+                </span>
+                <span className="tnum inline-flex items-center gap-1 font-medium">
+                  {preview.unassigned === 0 && <Check className="size-3.5" />}
+                  {preview.unassigned >= 0
+                    ? `${formatMoney(preview.unassigned, currency)} left`
+                    : `${formatMoney(-preview.unassigned, currency)} over`}
+                </span>
+              </div>
             )}
           </div>
 
@@ -371,7 +412,8 @@ function SplitBillForm({
           {problem && <p className="text-sm text-critical-ink">{problem}</p>}
 
           <ErrorNote error={mutation.error} />
-          <div className="flex justify-end gap-2">
+          <div className="flex items-center justify-end gap-2">
+            {blocker && <span className="mr-auto text-xs text-ink-3">{blocker}</span>}
             <Button type="button" variant="ghost" onClick={onClose}>
               Cancel
             </Button>
