@@ -286,6 +286,10 @@ class SharedExpenseCreate(BaseModel):
     participants: list[ParticipantIn] = Field(min_length=1, max_length=50)
 
 
+class BillTextIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
 class SettlementCreate(BaseModel):
     friend_id: uuid.UUID
     account_id: uuid.UUID

@@ -127,6 +127,21 @@ export interface FriendGroup {
 
 export type SplitMethod = 'equal' | 'exact' | 'shares'
 
+/** A split-bill form filled from a sentence. Nothing is saved until the user submits. */
+export interface BillDraft {
+  source: 'ai' | 'rules'
+  description: string | null
+  total_minor: number | null
+  occurred_on: string | null
+  payer_id: string | null
+  paid_from_id: string | null
+  category_id: string | null
+  group_id: string | null
+  method: SplitMethod
+  participants: { account_id: string | null; weight: number | null; amount_minor: number | null }[]
+  notes: string[]
+}
+
 export interface SharedBill {
   id: string
   entry_id: string

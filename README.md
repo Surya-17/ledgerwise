@@ -133,6 +133,7 @@ Interactive docs at `http://localhost:8000/docs` once running.
 | `GET` `POST` `PATCH` `DELETE` | `/api/groups` | Friend groups with per-group balances and total spend |
 | `GET` | `/api/shared` | Split bills and settle-ups, filterable by group or friend |
 | `POST` | `/api/shared/expenses` | Split a bill (equal / exact / shares); idempotent |
+| `POST` | `/api/shared/parse` | Turn "Dinner $90 with Alex and Sam, I paid" into a draft for the split form (nothing is saved) |
 | `POST` | `/api/shared/settlements` | Record a friend paying you back, or you paying them; idempotent |
 | `GET` | `/api/audit` | Audit trail |
 
@@ -175,6 +176,8 @@ The app ships as **one Docker image**: Node builds the React app, then FastAPI s
 Free-tier notes: the web service sleeps after 15 minutes idle (the first request takes ~30–60 s to wake), and Render's free PostgreSQL expires after 30 days. For a permanent free database, create one on [Neon](https://neon.tech) and set `DATABASE_URL` on the service to its connection string instead. `postgres://` URLs are normalized to the psycopg 3 driver automatically.
 
 Any Docker host works the same way: set `DATABASE_URL` and `JWT_SECRET`, expose `$PORT`.
+
+**Optional AI for "describe the bill":** set `AI_API_KEY` to a free [Google AI Studio](https://aistudio.google.com/apikey) key (Render: service → Environment). Without it, the built-in rule-based parser is used. `AI_MODEL` defaults to `gemini-flash-latest`. On Gemini's free tier, Google may use prompts to improve its products, so the note and your friend, group, category and account *names* (never balances or ids) leave the app when a key is set.
 
 ## Testing
 
@@ -220,6 +223,15 @@ Each friend is an asset account whose balance is what they owe you; a negative b
 | Visa Card | −90 | | |
 
 Only your share ever becomes spending, so budgets stay honest. Settling up is a transfer between a bank account and the friend's account. Removing a bill posts a reversing entry, like everywhere else. The split's details (payer, method, group) live in a separate `shared_entries` row; the money lives only in journal lines.
+
+### Describe a bill, get a filled form
+
+The split form takes a sentence like *"Cabin 600 on Tahoe ski trip except Jordan, Alex paid"* or *"Groceries 69: Priya 23, Sam 23, me 23, paid with my card yesterday"* and fills in the description, total, date, payer, card, category, group, people and split. The design keeps the model away from the money:
+
+- **Two extractors, one contract.** An LLM (Gemini's free tier, JSON-schema-constrained output) or a deterministic rule-based parser produces the same `RawBill` of *names and decimal strings*. The rules run when no key is set, when the model times out or is rate-limited, and in every test, so the feature never depends on a network call.
+- **The server resolves, the model doesn't.** Names are matched only against the user's own friends, groups, categories and accounts (exact, then unique prefix, then close spelling); invented people are reported, not created. Amounts become integer minor units through the same `Decimal` parser as everything else, and "Alex 20, Sam 15, rest is mine" gets its remainder computed exactly.
+- **It only fills a form.** Nothing is posted: the user sees the draft, with the remaining-to-assign bar and notes such as "Not found in your friends: Ravi", and saves through the normal validated, idempotent endpoint.
+- **Bounded cost.** With a key set, each user gets 30 parses per 10 minutes, so one person can't use up the free quota.
 
 ## Roadmap
 

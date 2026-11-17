@@ -1,6 +1,7 @@
 """Friends, groups and split bills (see app/services/sharing.py for the accounting)."""
 
 import uuid
+from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Response
@@ -11,8 +12,10 @@ from sqlalchemy.orm import selectinload
 from app.deps import DB, CurrentUser, IdempotencyKey
 from app.errors import LedgerError
 from app.models import Account, AccountType, FriendGroup, JournalEntry, SharedEntry, User
+from app.ratelimit import SlidingWindowLimiter
 from app.schemas import (
     AccountOut,
+    BillTextIn,
     FriendCreate,
     GroupIn,
     GroupOut,
@@ -20,7 +23,7 @@ from app.schemas import (
     SharedExpenseCreate,
     SharedOut,
 )
-from app.services import reports, sharing
+from app.services import bill_parser, ledger, reports, sharing
 from app.services.idempotency import run_idempotent
 
 router = APIRouter(tags=["sharing"])
@@ -226,3 +229,50 @@ def create_settlement(
 
     payload = {"op": "settlement", **body.model_dump(mode="json")}
     return run_idempotent(db, user.id, idempotency_key, payload, action)
+
+
+# --- Describe a bill ------------------------------------------------------------------
+
+# The AI provider's free tier has a small quota; keep one user from using it all.
+parse_limiter = SlidingWindowLimiter(30, 600, "Too many bill descriptions; try again shortly")
+
+
+def _parse_context(db: DB, user: User) -> bill_parser.Context:
+    accounts = db.scalars(
+        select(Account).where(Account.user_id == user.id, Account.is_archived.is_(False))
+    ).all()
+    friends = [a for a in accounts if a.kind == sharing.FRIEND]
+    groups = db.scalars(
+        select(FriendGroup)
+        .options(selectinload(FriendGroup.members))
+        .where(FriendGroup.user_id == user.id)
+    ).all()
+    return bill_parser.Context(
+        friends=[bill_parser.Named(a.id, a.name) for a in friends],
+        groups=[
+            (bill_parser.Named(g.id, g.name), [m.account_id for m in g.members]) for g in groups
+        ],
+        categories=[
+            bill_parser.Named(a.id, a.name) for a in accounts if a.type == AccountType.EXPENSE
+        ],
+        money=[
+            bill_parser.Named(a.id, a.name)
+            for a in accounts
+            if a.kind != sharing.FRIEND
+            and a.type in (AccountType.ASSET, AccountType.LIABILITY)
+            and not ledger.is_system_account(a)
+        ],
+        currency=user.base_currency,
+        today=date.today(),
+    )
+
+
+@router.post("/shared/parse", response_model=bill_parser.BillDraft)
+def parse_bill(body: BillTextIn, db: DB, user: CurrentUser) -> bill_parser.BillDraft:
+    """Turn "Dinner $90 with Alex and Sam, I paid" into a draft for the split form.
+
+    Nothing is saved: the client fills the form with the draft for the user to check.
+    """
+    if bill_parser.ai_enabled():
+        parse_limiter.check_and_hit(str(user.id))
+    return bill_parser.parse_bill(body.text, _parse_context(db, user))

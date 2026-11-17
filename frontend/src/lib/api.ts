@@ -2,6 +2,7 @@ import type {
   Account,
   AccountType,
   AuditEvent,
+  BillDraft,
   BudgetLine,
   CashFlowPoint,
   CategorySpend,
@@ -194,6 +195,7 @@ export const api = {
   shared: (p: { group_id?: string; friend_id?: string } = {}) => request<SharedBill[]>(`/shared${qs(p)}`),
   createSharedExpense: (body: SharedExpenseInput, idempotencyKey: string) =>
     request<SharedBill>('/shared/expenses', { method: 'POST', json: body, idempotencyKey }),
+  parseBill: (text: string) => request<BillDraft>('/shared/parse', { method: 'POST', json: { text } }),
   createSettlement: (
     body: {
       friend_id: string

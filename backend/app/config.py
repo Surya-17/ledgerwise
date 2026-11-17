@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173"]
     # Built React app to serve from the API (single-service deploys). Unset in development.
     static_dir: str | None = None
+    # Optional AI for "describe a bill" on the split form. Without a key, a built-in
+    # rule-based parser is used. Default provider: Google Gemini (free tier key from
+    # https://aistudio.google.com/apikey).
+    ai_api_key: str | None = None
+    ai_model: str = "gemini-flash-latest"
+    ai_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    ai_timeout_seconds: float = 12.0
 
     @field_validator("database_url")
     @classmethod

@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Check } from 'lucide-react'
+import { Check, Sparkles } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { api, newIdempotencyKey } from '../lib/api'
 import { isBalanceAccount, useAccounts } from '../lib/hooks'
 import { exponent, formatMoney, parseMoney, todayISO } from '../lib/money'
 import { balanceLabel, previewSplit } from '../lib/split'
-import type { Account, FriendGroup, SplitMethod } from '../lib/types'
+import type { Account, BillDraft, FriendGroup, SplitMethod } from '../lib/types'
 import { Button, ErrorNote, Field, Input, Modal, Segmented, Select, useToast } from './ui'
 
 const ME = 'me'
@@ -99,6 +99,8 @@ function SplitBillForm({
   const [weights, setWeights] = useState<Record<string, string>>({})
   const [exacts, setExacts] = useState<Record<string, string>>({})
   const [idemKey] = useState(newIdempotencyKey)
+  const [note, setNote] = useState('')
+  const [filled, setFilled] = useState<BillDraft | null>(null)
 
   const paidFrom = money.some((a) => a.id === paidFromChoice) ? paidFromChoice : (money[0]?.id ?? '')
   const category = categories.some((a) => a.id === categoryChoice)
@@ -163,6 +165,35 @@ function SplitBillForm({
               ? 'Check the amounts above'
               : null
 
+  // "Describe it": the server turns the sentence into a draft; we only fill the form.
+  const applyDraft = (d: BillDraft) => {
+    const cur = (d.category_id && byId.get(d.category_id)?.currency) || currency
+    const asText = (minor: number) => (minor / 10 ** exponent(cur)).toFixed(exponent(cur))
+    if (d.description) setDescription(d.description)
+    if (d.total_minor) setTotalText(asText(d.total_minor))
+    if (d.occurred_on) setDate(d.occurred_on)
+    if (d.category_id) setCategory(d.category_id)
+    if (d.paid_from_id) setPaidFrom(d.paid_from_id)
+    setGroupId(d.group_id)
+    setPayer(d.payer_id ?? ME)
+    setMethod(d.method)
+    if (d.participants.length) {
+      const key = (id: string | null) => id ?? ME
+      setSelected(d.participants.map((p) => key(p.account_id)))
+      setWeights(Object.fromEntries(d.participants.map((p) => [key(p.account_id), String(p.weight ?? 1)])))
+      setExacts(
+        Object.fromEntries(
+          d.participants.map((p) => [key(p.account_id), p.amount_minor != null ? asText(p.amount_minor) : '']),
+        ),
+      )
+    }
+    setFilled(d)
+  }
+  const fill = useMutation({ mutationFn: () => api.parseBill(note.trim()), onSuccess: applyDraft })
+  const runFill = () => {
+    if (note.trim() && !fill.isPending) fill.mutate()
+  }
+
   const toggle = (id: string) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
 
@@ -207,6 +238,43 @@ function SplitBillForm({
         <p className="text-sm text-ink-2">Add a friend first, then you can split bills with them.</p>
       ) : (
         <form onSubmit={submit} className="space-y-4">
+          <div className="rounded-lg border border-line bg-surface-2/60 p-3">
+            <label htmlFor="describe-bill" className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium text-ink-2">
+              <Sparkles className="size-3.5 text-brand" aria-hidden /> Describe the bill and we'll fill in the form
+            </label>
+            <div className="flex gap-2">
+              <Input
+                id="describe-bill"
+                placeholder="Dinner $90 with Alex and Sam, I paid with my card"
+                value={note}
+                maxLength={1000}
+                onChange={(e) => setNote(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault() // don't submit the bill
+                    runFill()
+                  }
+                }}
+              />
+              <Button type="button" variant="secondary" loading={fill.isPending} disabled={!note.trim()} onClick={runFill}>
+                Fill in
+              </Button>
+            </div>
+            {filled && !fill.isPending && (
+              <div className="mt-2 space-y-0.5 text-xs" role="status">
+                <p className="text-ink-3">
+                  {filled.source === 'ai' ? 'Filled in by AI.' : 'Filled in from your text.'} Check the details below before saving.
+                </p>
+                {filled.notes.map((n) => (
+                  <p key={n} className="text-critical-ink">
+                    {n}
+                  </p>
+                ))}
+              </div>
+            )}
+            <ErrorNote error={fill.error} />
+          </div>
+
           <div className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
             <Field label="Description">
               <Input

@@ -21,11 +21,13 @@ const FRIENDS = [acct('a', 'Akhil', 'asset', 'friend'), acct('m', 'Manasa', 'ass
 let accounts: Account[] = []
 
 const createSharedExpense = vi.fn()
+const parseBill = vi.fn()
 vi.mock('../lib/api', () => ({
   api: {
     accounts: () => Promise.resolve(accounts),
     friends: () => Promise.resolve(FRIENDS),
     createSharedExpense: (...a: unknown[]) => createSharedExpense(...a),
+    parseBill: (...a: unknown[]) => parseBill(...a),
   },
   newIdempotencyKey: () => 'k',
 }))
@@ -81,5 +83,48 @@ describe('SplitBillModal exact amounts', () => {
     await screen.findByLabelText('Include Sravya')
     expect(await screen.findByText(/No bank account or card yet/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Add one' }).getAttribute('href')).toBe('/accounts')
+  })
+})
+
+describe('SplitBillModal describe-the-bill', () => {
+  it('fills the form from the draft and saves exactly what it shows', async () => {
+    parseBill.mockResolvedValue({
+      source: 'ai',
+      description: 'Groceries',
+      total_minor: 6900,
+      occurred_on: '2026-11-10',
+      payer_id: null,
+      paid_from_id: 'chk',
+      category_id: 'din',
+      group_id: null,
+      method: 'exact',
+      participants: [
+        { account_id: null, weight: null, amount_minor: 2300 },
+        { account_id: 's', weight: null, amount_minor: 2300 },
+        { account_id: 'm', weight: null, amount_minor: 2300 },
+      ],
+      notes: ['Not found in your friends or groups: Ravi'],
+    })
+    const user = renderModal()
+    await screen.findByLabelText('Include Sravya')
+    await screen.findByRole('option', { name: 'Checking' })
+    await user.type(screen.getByLabelText(/Describe the bill/), 'groceries 69, me sravya manasa 23 each, and Ravi{Enter}')
+    expect(parseBill).toHaveBeenCalledWith('groceries 69, me sravya manasa 23 each, and Ravi')
+    expect(await screen.findByText(/Filled in by AI/)).toBeTruthy()
+    expect(screen.getByText('Not found in your friends or groups: Ravi')).toBeTruthy()
+    expect((screen.getByPlaceholderText("Dinner at Joe's") as HTMLInputElement).value).toBe('Groceries')
+    expect((screen.getByLabelText('Amount for Sravya') as HTMLInputElement).value).toBe('23.00')
+    expect(screen.getByLabelText('Include Akhil').getAttribute('aria-checked')).toBe('false')
+    expect(createSharedExpense).not.toHaveBeenCalled() // Enter in the describe box never saves
+
+    await user.click(screen.getByRole('button', { name: 'Save bill' }))
+    await waitFor(() => expect(createSharedExpense).toHaveBeenCalledTimes(1))
+    const body = createSharedExpense.mock.calls[0][0]
+    expect(body).toMatchObject({ description: 'Groceries', total_minor: 6900, occurred_on: '2026-11-10', method: 'exact' })
+    expect(body.participants).toEqual([
+      { account_id: null, amount_minor: 2300 },
+      { account_id: 'm', amount_minor: 2300 },
+      { account_id: 's', amount_minor: 2300 },
+    ])
   })
 })
