@@ -1,25 +1,43 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ShieldCheck } from 'lucide-react'
+import { Plus, ShieldCheck, Split, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
-import { api, newIdempotencyKey, type LineInput } from '../lib/api'
+import { api, newIdempotencyKey } from '../lib/api'
 import { isBalanceAccount, useAccounts } from '../lib/hooks'
+import { buildLines, type EntryKind, type Part } from '../lib/journal'
 import { formatMoney, parseMoney, todayISO } from '../lib/money'
 import type { Account } from '../lib/types'
 import { Button, ErrorNote, Field, Input, Modal, Segmented, Select, useToast } from './ui'
 
-type Kind = 'expense' | 'income' | 'transfer'
+interface SplitRow {
+  key: number
+  account: string
+  amount: string
+}
+
+function parsePositive(text: string, currency: string): { minor: number | null; error: string | null } {
+  if (!text.trim()) return { minor: null, error: null }
+  try {
+    const minor = parseMoney(text, currency)
+    return minor > 0 ? { minor, error: null } : { minor: null, error: 'Enter a positive amount' }
+  } catch (e) {
+    return { minor: null, error: (e as Error).message }
+  }
+}
+
+let rowKey = 0
 
 export function NewTransactionModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { accounts, byId } = useAccounts()
   const qc = useQueryClient()
   const toast = useToast()
 
-  const [kind, setKind] = useState<Kind>('expense')
+  const [kind, setKind] = useState<EntryKind>('expense')
   const [date, setDate] = useState(todayISO())
   const [description, setDescription] = useState('')
   const [amount, setAmount] = useState('')
   const [accountChoice, setAccount] = useState('')
   const [counterChoice, setCounter] = useState('')
+  const [splits, setSplits] = useState<SplitRow[] | null>(null)
   // One key per logical submission: a double-click or network retry replays, never re-posts.
   const [idemKey, setIdemKey] = useState(newIdempotencyKey)
 
@@ -33,38 +51,45 @@ export function NewTransactionModal({ open, onClose }: { open: boolean; onClose:
       : kind === 'income'
         ? live.filter((a) => a.type === 'income')
         : money.filter((a) => a.id !== account)
-
   const counter = counterOptions.some((a) => a.id === counterChoice) ? counterChoice : (counterOptions[0]?.id ?? '')
-
   const currency = byId.get(account)?.currency ?? 'USD'
-  const parsed = useMemo(() => {
-    if (!amount.trim()) return { minor: null, error: null }
-    try {
-      const minor = parseMoney(amount, currency)
-      if (minor <= 0) return { minor: null, error: 'Enter a positive amount' }
-      return { minor, error: null }
-    } catch (e) {
-      return { minor: null, error: (e as Error).message }
-    }
-  }, [amount, currency])
+  const splitting = splits !== null && kind !== 'transfer'
 
-  // Positive = debit, negative = credit. Every entry sums to zero.
-  const lines: LineInput[] | null = useMemo(() => {
-    const m = parsed.minor
-    if (!m || !account || !counter) return null
-    if (kind === 'expense') return [
-      { account_id: counter, amount_minor: m },
-      { account_id: account, amount_minor: -m },
-    ]
-    if (kind === 'income') return [
-      { account_id: account, amount_minor: m },
-      { account_id: counter, amount_minor: -m },
-    ]
-    return [
-      { account_id: counter, amount_minor: m },
-      { account_id: account, amount_minor: -m },
-    ]
-  }, [parsed.minor, account, counter, kind])
+  const single = useMemo(() => parsePositive(amount, currency), [amount, currency])
+  const splitParsed = useMemo(
+    () => (splits ?? []).map((r) => ({ ...r, ...parsePositive(r.amount, currency) })),
+    [splits, currency],
+  )
+
+  const parts: Part[] = splitting
+    ? splitParsed.filter((r) => r.minor && r.account).map((r) => ({ account_id: r.account, amount_minor: r.minor! }))
+    : single.minor && counter
+      ? [{ account_id: counter, amount_minor: single.minor }]
+      : []
+  const splitIncomplete = splitting && splitParsed.some((r) => !r.minor)
+  const lines = splitIncomplete ? null : buildLines(kind, account, parts)
+  const total = parts.reduce((s, p) => s + p.amount_minor, 0)
+
+  const startSplit = () => {
+    const first = { key: ++rowKey, account: counter, amount }
+    const second = { key: ++rowKey, account: counterOptions.find((a) => a.id !== counter)?.id ?? counter, amount: '' }
+    setSplits([first, second])
+  }
+  const updateRow = (key: number, patch: Partial<SplitRow>) =>
+    setSplits((rows) => rows && rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+  const removeRow = (key: number) => {
+    const next = (splits ?? []).filter((r) => r.key !== key)
+    if (next.length <= 1) {
+      // Back to a simple one-category transaction, keeping what was typed.
+      if (next[0]) {
+        setCounter(next[0].account)
+        setAmount(next[0].amount)
+      }
+      setSplits(null)
+    } else {
+      setSplits(next)
+    }
+  }
 
   const mutation = useMutation({
     mutationFn: () => api.createEntry({ occurred_on: date, description: description.trim(), lines: lines! }, idemKey),
@@ -73,6 +98,7 @@ export function NewTransactionModal({ open, onClose }: { open: boolean; onClose:
       toast('Transaction posted')
       setDescription('')
       setAmount('')
+      setSplits(null)
       setIdemKey(newIdempotencyKey())
       onClose()
     },
@@ -89,16 +115,14 @@ export function NewTransactionModal({ open, onClose }: { open: boolean; onClose:
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={close}
-      title="New transaction"
-      description="Posted as a balanced double-entry journal entry."
-    >
+    <Modal open={open} onClose={close} title="New transaction" description="Posted as a balanced double-entry journal entry.">
       <form onSubmit={submit} className="space-y-4">
-        <Segmented<Kind>
+        <Segmented<EntryKind>
           value={kind}
-          onChange={setKind}
+          onChange={(k) => {
+            setKind(k)
+            if (k === 'transfer') setSplits(null)
+          }}
           options={[
             { value: 'expense', label: 'Expense' },
             { value: 'income', label: 'Income' },
@@ -106,23 +130,31 @@ export function NewTransactionModal({ open, onClose }: { open: boolean; onClose:
           ]}
         />
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Amount" error={parsed.error}>
-            <Input
-              inputMode="decimal"
-              placeholder="0.00"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="tnum"
-              required
-            />
-          </Field>
+          {splitting ? (
+            <Field label="Total">
+              <div className="tnum flex h-9 items-center rounded-lg bg-surface-2 px-3 text-sm font-medium">
+                {formatMoney(total, currency)}
+              </div>
+            </Field>
+          ) : (
+            <Field label="Amount" error={single.error}>
+              <Input
+                inputMode="decimal"
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="tnum"
+                required
+              />
+            </Field>
+          )}
           <Field label="Date">
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
           </Field>
         </div>
         <Field label="Description">
           <Input
-            placeholder={kind === 'expense' ? 'Trader Joe’s' : kind === 'income' ? 'Paycheck' : 'Move to savings'}
+            placeholder={kind === 'expense' ? 'Costco run' : kind === 'income' ? 'Paycheck' : 'Move to savings'}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             maxLength={500}
@@ -139,16 +171,77 @@ export function NewTransactionModal({ open, onClose }: { open: boolean; onClose:
               ))}
             </Select>
           </Field>
-          <Field label={kind === 'transfer' ? 'To' : 'Category'}>
-            <Select value={counter} onChange={(e) => setCounter(e.target.value)}>
-              {counterOptions.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          {!splitting && (
+            <Field label={kind === 'transfer' ? 'To' : 'Category'}>
+              <Select value={counter} onChange={(e) => setCounter(e.target.value)}>
+                {counterOptions.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
         </div>
+
+        {kind !== 'transfer' &&
+          (splitting ? (
+            <fieldset className="space-y-2">
+              <legend className="mb-1.5 text-[13px] font-medium text-ink-2">Split across categories</legend>
+              {splitParsed.map((r, i) => (
+                <div key={r.key}>
+                  <div className="grid grid-cols-[minmax(0,1fr)_7rem_auto] gap-2">
+                    <Select
+                      value={r.account}
+                      onChange={(e) => updateRow(r.key, { account: e.target.value })}
+                      aria-label={`Category ${i + 1}`}
+                    >
+                      {counterOptions.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Input
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={r.amount}
+                      onChange={(e) => updateRow(r.key, { amount: e.target.value })}
+                      className="tnum"
+                      aria-label={`Amount ${i + 1}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeRow(r.key)}
+                      className="rounded-md px-2 text-ink-3 hover:bg-surface-hover hover:text-ink"
+                      aria-label={`Remove split ${i + 1}`}
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+                  {r.error && <div className="mt-1 text-xs text-critical-ink">{r.error}</div>}
+                </div>
+              ))}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                icon={<Plus className="size-3.5" />}
+                onClick={() => setSplits((rows) => [...(rows ?? []), { key: ++rowKey, account: counter, amount: '' }])}
+                disabled={(splits?.length ?? 0) >= 10}
+              >
+                Add category
+              </Button>
+            </fieldset>
+          ) : (
+            <button
+              type="button"
+              onClick={startSplit}
+              className="inline-flex items-center gap-1.5 text-[13px] font-medium text-brand hover:underline"
+            >
+              <Split className="size-3.5" /> Split across categories
+            </button>
+          ))}
 
         {lines && (
           <div className="rounded-lg border border-line bg-surface-2/60 p-3">

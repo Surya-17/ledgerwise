@@ -59,3 +59,44 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build # tsc type-check + Vite production build
+
+  docker:
+    # Build the production image and boot it against PostgreSQL, exactly as Render runs it.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ledgerwise
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ledgerwise .
+      - name: Boot (runs migrations on start)
+        run: |
+          docker run -d --name app --network host \
+            -e DATABASE_URL=postgres://postgres:postgres@localhost:5432/ledgerwise \
+            -e JWT_SECRET=ci-only-secret -e PORT=8000 ledgerwise
+          for i in $(seq 1 60); do
+            curl -fsS localhost:8000/api/health && exit 0
+            sleep 1
+          done
+          docker logs app
+          exit 1
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          curl -fsS localhost:8000/ | grep -q "<title>Ledgerwise</title>"
+          curl -fsS localhost:8000/transactions | grep -q 'id="root"'  # SPA deep link
+          curl -fsSI localhost:8000/api/health | grep -qi "x-content-type-options: nosniff"
+          TOKEN=$(curl -fsS -X POST localhost:8000/api/auth/demo | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+          curl -fsS -H "Authorization: Bearer $TOKEN" localhost:8000/api/accounts | python3 -c "import sys,json;a=json.load(sys.stdin);assert any(x['name']=='Checking' for x in a),a"
+          curl -fsS -H "Authorization: Bearer $TOKEN" localhost:8000/api/reports/recurring | python3 -c "import sys,json;assert len(json.load(sys.stdin))>3"
+      - name: Logs on failure
+        if: failure()
+        run: docker logs app || true

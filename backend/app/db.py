@@ -19,7 +19,9 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+# Fail fast instead of hanging when the database is unreachable (health checks, boot).
+_connect_args = {"connect_timeout": 5} if settings.database_url.startswith("postgresql") else {}
+engine = create_engine(settings.database_url, pool_pre_ping=True, connect_args=_connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

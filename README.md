@@ -38,6 +38,7 @@ Because every entry balances, the whole ledger always satisfies the accounting e
 | **Re-importing a statement never double-counts** | Each CSV row gets a SHA-256 fingerprint `(account, date, amount, normalized description, occurrence #)`, with `UNIQUE (user_id, import_fingerprint)`. The occurrence counter keeps two identical $4.50 coffees on the same day distinct. |
 | **Imports are atomic** | If any row fails to parse, nothing is saved and every bad row is reported with its line number. |
 | **Tenant isolation in the schema** | Journal lines reference accounts through a composite FK `(account_id, user_id, currency)`, so the database itself rejects a line that points at another user's account or the wrong currency. |
+| **System accounts can't be forked** | Opening Balance Equity and the Uncategorized fallbacks are found by name by the importer, so they can't be renamed, archived, or impersonated by a new account with a reserved name. |
 | **Every change is audited** | Audit events are written in the same transaction as the change: an audit row exists if and only if the change committed. |
 
 ## The dashboard
@@ -46,7 +47,7 @@ Because every entry balances, the whole ledger always satisfies the accounting e
 |---|---|
 | **Overview** | Net worth over time, income vs. spending, spending by category, budget progress, recent activity |
 | **Transactions** | Search and filter; expand any row to see its debit/credit journal lines; reverse or recategorize (both post new entries, never edits) |
-| **New transaction** | Expense / income / transfer, with a live journal preview of the lines that will post. Each form carries one `Idempotency-Key`, so a double-click or retry can't double-post |
+| **New transaction** | Expense / income / transfer, optionally **split across categories**, with a live journal preview of the lines that will post. Each form carries one `Idempotency-Key`, so a double-click or retry can't double-post |
 | **Accounts** | Assets, liabilities and categories with computed balances; opening balances post against equity |
 | **Budgets** | Month-by-month limits vs. actuals, status with icon + label (never colour alone), copy from last month |
 | **Recurring** | Subscriptions, bills and paychecks detected from ledger history, with monthly cost, next expected date, and *lapsed* flags for charges that stopped |
@@ -59,6 +60,14 @@ Money input is parsed from strings into integer minor units in the browser too (
 <p><img src="docs/transactions.png" width="49%" alt="Transaction journal lines"> <img src="docs/dashboard-dark.png" width="49%" alt="Dark mode"></p>
 
 ![Recurring charges](docs/recurring.png)
+
+## Operational hardening
+
+- **Brute-force protection:** failed sign-ins are limited per account (10 per 15 min, from any address) and per address (30 per 15 min, across accounts), with `Retry-After`. Only failures count, and a successful sign-in clears the account's counter. Demo sandbox creation is limited per address too. The limiter is an in-process sliding window behind a small interface ([`ratelimit.py`](backend/app/ratelimit.py)), so moving to Redis for multiple instances doesn't touch callers.
+- **Security headers** on every response: a strict Content-Security-Policy (same-origin plus Google Fonts), `X-Frame-Options: DENY`, `nosniff`, a referrer policy, and HSTS over HTTPS.
+- **Request IDs:** every response carries `X-Request-ID` (a sane upstream ID is propagated), and API calls are access-logged with method, path, status, latency and that ID.
+- **Readiness-aware health check:** `/api/health` runs `SELECT 1`, returning 503 when the database is down so the platform stops routing traffic. Postgres connections time out after 5 s instead of hanging.
+- **CI boots the real image:** besides the backend (PostgreSQL) and frontend jobs, CI builds the production Docker image, starts it against PostgreSQL 17, and smoke-tests the SPA, a deep link, the headers, and a demo sign-in through to real API data.
 
 ## Architecture
 
@@ -175,7 +184,8 @@ The suite includes:
 - **Money tests:** format → parse round-trips for every supported currency, and rejection of sub-cent precision, scientific notation and `NaN`.
 - **API tests:** auth, cross-user isolation, idempotent replay and key-reuse conflicts, reversal rules, imports (re-import, overlapping statements, duplicate identical rows, atomic failure, custom formats) and reports.
 - **Transfer matching and recurring detection:** both sides of a transfer collapse to one entry, re-imports stay idempotent, out-of-window and categorized rows are left alone; cadences (weekly → yearly, including 1st-and-15th paychecks), lapsed subscriptions, and reversals not counting as occurrences.
-- **Frontend unit tests (Vitest):** exact string-to-minor-unit parsing and its round trip with formatting, and the ledger-to-transaction view (transfers vs. spending, card payments, splits).
+- **Frontend unit tests (Vitest):** exact string-to-minor-unit parsing and its round trip with formatting, the ledger-to-transaction view (transfers vs. spending, card payments, splits), and the journal-line builder (including a randomized check that every generated entry balances).
+- **Security tests:** headers, request-ID propagation, per-account and per-address sign-in limits, and counter reset on success.
 - **Database guard tests:** the triggers and composite foreign keys reject unbalanced, mutated or cross-tenant rows written with raw SQL.
 
 CI runs lint, `alembic upgrade head`, `alembic check` (migrations match the models) and the full suite against PostgreSQL 17 on every push.

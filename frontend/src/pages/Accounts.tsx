@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, CreditCard, Landmark, Plus, TrendingDown, TrendingUp } from 'lucide-react'
-import { useMemo, useState, type FormEvent } from 'react'
+import { Archive, ArchiveRestore, CreditCard, Landmark, Pencil, Plus, TrendingDown, TrendingUp } from 'lucide-react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Button,
@@ -138,21 +138,86 @@ function AccountRow({ account: a }: { account: Account }) {
     },
     onError: (e) => toast((e as Error).message, 'critical'),
   })
-  const builtIn = a.type === 'equity' || a.name.startsWith('Uncategorized')
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(a.name)
+  const rename = useMutation({
+    mutationFn: (name: string) => api.updateAccount(a.id, { name }),
+    onSuccess: (updated) => {
+      qc.invalidateQueries()
+      toast(`Renamed to ${updated.name}`)
+      setEditing(false)
+    },
+    onError: (e) => toast((e as Error).message, 'critical'),
+  })
+  // Enter submits and the input then blurs in the same tick; a ref (not render state)
+  // makes sure that only sends one rename.
+  const saving = useRef(false)
+  const save = () => {
+    if (saving.current) return
+    const name = draft.trim()
+    if (!name || name === a.name) return setEditing(false)
+    saving.current = true
+    rename.mutate(name, { onSettled: () => (saving.current = false) })
+  }
+  // Matches the server's system-account rule: these are looked up by name.
+  const builtIn = /^(Opening Balance Equity|Uncategorized (Income|Expense))/.test(a.name)
+  const action =
+    'rounded-md p-1.5 text-ink-3 transition hover:bg-surface-2 hover:text-ink sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100'
   return (
     <li className={clsx('group flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-surface-hover', a.is_archived && 'opacity-60')}>
-      <Link to={`/transactions?account=${a.id}`} className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium">{a.name}</div>
-        <div className="text-xs text-ink-3">
-          {a.currency}
-          {a.is_archived && ' · archived'}
-        </div>
-      </Link>
+      {editing ? (
+        <form
+          className="min-w-0 flex-1"
+          onSubmit={(e) => {
+            e.preventDefault()
+            save()
+          }}
+        >
+          <Input
+            autoFocus
+            value={draft}
+            maxLength={100}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={save}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setDraft(a.name)
+                setEditing(false)
+              }
+            }}
+            disabled={rename.isPending}
+            aria-label={`New name for ${a.name}`}
+            className="h-8"
+          />
+        </form>
+      ) : (
+        <Link to={`/transactions?account=${a.id}`} className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{a.name}</div>
+          <div className="text-xs text-ink-3">
+            {a.currency}
+            {a.is_archived && ' · archived'}
+            {builtIn && ' · system'}
+          </div>
+        </Link>
+      )}
       <Money minor={a.balance_minor} currency={a.currency} className="text-sm font-medium" />
+      {!builtIn && !editing && (
+        <button
+          onClick={() => {
+            setDraft(a.name)
+            setEditing(true)
+          }}
+          className={action}
+          aria-label={`Rename ${a.name}`}
+          title="Rename"
+        >
+          <Pencil className="size-4" />
+        </button>
+      )}
       {!builtIn && (
         <button
           onClick={() => archive.mutate()}
-          className="rounded-md p-1.5 text-ink-3 opacity-100 transition hover:bg-surface-2 hover:text-ink sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
+          className={action}
           aria-label={a.is_archived ? `Restore ${a.name}` : `Archive ${a.name}`}
           title={a.is_archived ? 'Restore' : 'Archive'}
         >

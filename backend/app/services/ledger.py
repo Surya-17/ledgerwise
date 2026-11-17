@@ -38,6 +38,14 @@ DEFAULT_ACCOUNTS: list[tuple[AccountType, str]] = [
 ]
 
 
+SYSTEM_ACCOUNT_PREFIXES = (OPENING_BALANCE_EQUITY, UNCATEGORIZED_INCOME, UNCATEGORIZED_EXPENSE)
+
+
+def is_system_account(account: Account) -> bool:
+    """Accounts the importer and opening-balance logic find by name (incl. "(EUR)" variants)."""
+    return account.name.startswith(SYSTEM_ACCOUNT_PREFIXES)
+
+
 @dataclass(frozen=True)
 class LineInput:
     account_id: uuid.UUID

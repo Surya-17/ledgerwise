@@ -1,15 +1,9 @@
 from datetime import date
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.routers import auth as auth_router
 from tests.conftest import accounts_by_name
-
-
-@pytest.fixture(autouse=True)
-def _reset_rate_limit() -> None:
-    auth_router._demo_hits.clear()
 
 
 def _demo(client: TestClient, ip: str = "203.0.113.7") -> dict:

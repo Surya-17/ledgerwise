@@ -68,6 +68,18 @@ def _clean_tables(engine: Engine) -> None:
                 conn.execute(table.delete())
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limits() -> None:
+    from app.routers import auth as auth_router
+
+    for limiter in (
+        auth_router.demo_limiter,
+        auth_router.login_account_limiter,
+        auth_router.login_ip_limiter,
+    ):
+        limiter.reset()
+
+
 @pytest.fixture
 def session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

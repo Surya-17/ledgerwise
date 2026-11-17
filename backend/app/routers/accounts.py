@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app import audit
 from app.deps import DB, CurrentUser
-from app.errors import ConflictError
+from app.errors import ConflictError, LedgerError
 from app.models import Account
 from app.schemas import AccountCreate, AccountOut, AccountUpdate
 from app.services import ledger, reports
@@ -28,6 +28,8 @@ def list_accounts(
 
 @router.post("", response_model=AccountOut, status_code=201)
 def create_account(body: AccountCreate, db: DB, user: CurrentUser) -> AccountOut:
+    if body.name.startswith(ledger.SYSTEM_ACCOUNT_PREFIXES):
+        raise LedgerError("That name is reserved for a system account")
     account = ledger.create_account(
         db,
         user,
@@ -47,6 +49,12 @@ def update_account(
 ) -> AccountOut:
     account = ledger.get_account(db, user, account_id)
     changes = body.model_dump(exclude_unset=True, exclude_none=True)
+    if changes and ledger.is_system_account(account):
+        # The importer and opening balances look these up by name; renaming or hiding
+        # one would silently fork it into a duplicate on the next import.
+        raise LedgerError(f"'{account.name}' is a system account and can't be renamed or archived")
+    if "name" in changes and changes["name"].startswith(ledger.SYSTEM_ACCOUNT_PREFIXES):
+        raise LedgerError("That name is reserved for a system account")
     if "name" in changes and changes["name"] != account.name:
         taken = db.scalar(
             select(Account.id).where(Account.user_id == user.id, Account.name == changes["name"])

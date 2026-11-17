@@ -241,3 +241,27 @@ def test_list_entries_filters(client: TestClient, auth: dict) -> None:
     found = client.get("/api/entries", headers=auth, params={"q": "100%"}).json()
     assert [e["description"] for e in found] == ["Blue Bottle 100%"]
     assert len(client.get(f"/api/entries?account_id={dining['id']}", headers=auth).json()) == 2
+
+
+def test_system_accounts_cannot_be_renamed_archived_or_impersonated(
+    client: TestClient, auth: dict
+) -> None:
+    accounts = {a["name"]: a for a in client.get("/api/accounts", headers=auth).json()}
+    for name in ("Uncategorized Expense", "Opening Balance Equity"):
+        acct_id = accounts[name]["id"]
+        r = client.patch(f"/api/accounts/{acct_id}", headers=auth, json={"name": "Misc"})
+        assert r.status_code == 422, r.text
+        r = client.patch(f"/api/accounts/{acct_id}", headers=auth, json={"is_archived": True})
+        assert r.status_code == 422
+    groceries = accounts["Groceries"]["id"]
+    r = client.patch(
+        f"/api/accounts/{groceries}", headers=auth, json={"name": "Uncategorized Expense (old)"}
+    )
+    assert r.status_code == 422
+    r = client.post(
+        "/api/accounts", headers=auth, json={"name": "Uncategorized Income 2", "type": "income"}
+    )
+    assert r.status_code == 422
+    # Ordinary accounts can still be renamed.
+    r = client.patch(f"/api/accounts/{groceries}", headers=auth, json={"name": "Food"})
+    assert r.status_code == 200 and r.json()["name"] == "Food"
