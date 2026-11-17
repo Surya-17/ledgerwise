@@ -102,6 +102,9 @@ class Account(Base):
     type: Mapped[AccountType] = mapped_column(_enum(AccountType, "account_type"))
     currency: Mapped[str] = mapped_column(String(3))
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # "friend": an asset account holding what one person owes you (negative: what you owe
+    # them). Shared bills post against it like any other account.
+    kind: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -227,4 +230,57 @@ class AuditEvent(Base):
     entity_type: Mapped[str] = mapped_column(String(32))
     entity_id: Mapped[str] = mapped_column(String(64))
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FriendGroup(Base):
+    """A named set of friends you split bills with ("Roommates", "Ski trip")."""
+
+    __tablename__ = "friend_groups"
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    members: Mapped[list[FriendGroupMember]] = relationship(
+        cascade="all, delete-orphan", order_by="FriendGroupMember.position"
+    )
+
+
+class FriendGroupMember(Base):
+    __tablename__ = "friend_group_members"
+
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("friend_groups.id", ondelete="CASCADE"), primary_key=True
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SharedEntry(Base):
+    """Split details for a journal entry: who paid, who shared, how it was divided.
+
+    The money effect lives entirely in the journal entry's lines; this row is the
+    human-readable record of the split (and links it to a group).
+    """
+
+    __tablename__ = "shared_entries"
+    __table_args__ = (Index("ix_shared_entries_user_id_group_id", "user_id", "group_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    entry_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("journal_entries.id"), unique=True)
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("friend_groups.id", ondelete="SET NULL")
+    )
+    kind: Mapped[str] = mapped_column(String(16))  # "expense" | "settlement"
+    # None means you paid; otherwise the friend account of whoever paid.
+    payer_account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id"))
+    total_minor: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3))
+    method: Mapped[str | None] = mapped_column(String(16))  # equal | exact | shares
+    # [{"account_id": uuid | null (you), "amount_minor": int}] for every participant.
+    shares: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

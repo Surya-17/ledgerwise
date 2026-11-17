@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from app.models import AccountType, Budget, CategoryRule, User
-from app.services import imports, ledger, reports
+from app.services import imports, ledger, reports, sharing
 
 DINING = [
     "Blue Bottle Coffee",
@@ -135,3 +135,98 @@ def populate_demo_data(db: Session, user: User) -> None:
             Budget(user_id=user.id, account_id=acct[name].id, month=this_month, amount_minor=cents)
         )
     db.flush()
+
+    _shared_demo(db, user, today, checking=checking.id, card=card.id, acct=acct)
+
+
+def _shared_demo(db: Session, user: User, today: date, *, checking, card, acct) -> None:
+    """Friends, two groups and a few split bills, so the Shared page tells a story."""
+    travel = ledger.create_account(
+        db, user, name="Travel", account_type=AccountType.EXPENSE, currency="USD"
+    )
+    f = {n: sharing.create_friend(db, user, n).id for n in ("Alex", "Priya", "Sam", "Jordan")}
+    roommates = sharing.set_group(
+        db, user, None, name="Roommates", member_ids=[f["Alex"], f["Priya"]]
+    )
+    trip = sharing.set_group(
+        db, user, None, name="Tahoe ski trip", member_ids=[f["Alex"], f["Sam"], f["Jordan"]]
+    )
+    me = sharing.Participant(None)
+
+    def bill(
+        days_ago, description, cents, category, *, group=None, payer=None, people, method="equal"
+    ):
+        sharing.post_shared_expense(
+            db,
+            user,
+            occurred_on=today - timedelta(days=days_ago),
+            description=description,
+            total_minor=cents,
+            category_id=acct[category].id if category in acct else travel.id,
+            payer_id=payer,
+            paid_from_id=None if payer else card,
+            group_id=group.id if group else None,
+            method=method,
+            participants=people,
+        )
+
+    house = [me, sharing.Participant(f["Alex"]), sharing.Participant(f["Priya"])]
+    for months_ago in (2, 1, 0):
+        days = months_ago * 30 + 3
+        bill(days, "Spectrum internet", 89_97, "Utilities", group=roommates, people=house)
+    bill(
+        26,
+        "Costco: paper towels, coffee",
+        64_50,
+        "Groceries",
+        group=roommates,
+        payer=f["Priya"],
+        people=house,
+    )
+    bill(9, "Cleaning supplies", 31_20, "Shopping", group=roommates, payer=f["Alex"], people=house)
+
+    crew = [me, *(sharing.Participant(f[n]) for n in ("Alex", "Sam", "Jordan"))]
+    bill(40, "Cabin rental, 3 nights", 960_00, "Travel", group=trip, payer=f["Sam"], people=crew)
+    bill(39, "Lift tickets", 516_00, "Travel", group=trip, people=crew)
+    bill(
+        38,
+        "Groceries for the cabin",
+        142_80,
+        "Groceries",
+        group=trip,
+        payer=f["Alex"],
+        method="shares",
+        people=[
+            sharing.Participant(None, weight=1),
+            sharing.Participant(f["Alex"], weight=2),  # Alex brought his partner
+            sharing.Participant(f["Sam"], weight=1),
+            sharing.Participant(f["Jordan"], weight=1),
+        ],
+    )
+    bill(
+        12,
+        "Birthday dinner",
+        186_40,
+        "Dining",
+        method="exact",
+        people=[
+            sharing.Participant(None, amount_minor=96_40),
+            sharing.Participant(f["Priya"], amount_minor=90_00),
+        ],
+    )
+
+    for friend, cents, direction, days_ago, group in [
+        ("Alex", 29_99, "they_paid", 55, roommates),
+        ("Sam", 240_00, "you_paid", 30, trip),
+        ("Jordan", 129_00, "they_paid", 20, trip),
+    ]:
+        sharing.post_settlement(
+            db,
+            user,
+            friend_id=f[friend],
+            account_id=checking,
+            amount_minor=cents,
+            direction=direction,
+            occurred_on=today - timedelta(days=days_ago),
+            group_id=group.id,
+        )

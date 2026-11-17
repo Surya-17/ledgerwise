@@ -12,12 +12,20 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app import audit
 from app.errors import ConflictError, LedgerError, NotFoundError
-from app.models import Account, AccountType, EntrySource, JournalEntry, JournalLine, User
+from app.models import (
+    Account,
+    AccountType,
+    EntrySource,
+    JournalEntry,
+    JournalLine,
+    SharedEntry,
+    User,
+)
 
 OPENING_BALANCE_EQUITY = "Opening Balance Equity"
 UNCATEGORIZED_INCOME = "Uncategorized Income"
@@ -281,7 +289,7 @@ def recategorize_entry(
     get_account(db, user, to_account_id)
 
     reverse_entry(db, user, entry.id, reason="recategorized")
-    return post_entry(
+    corrected = post_entry(
         db,
         user,
         occurred_on=entry.occurred_on,
@@ -295,3 +303,8 @@ def recategorize_entry(
             for ln in entry.lines
         ],
     )
+    # A split bill keeps its split details (who paid, group) on the corrected entry.
+    db.execute(
+        update(SharedEntry).where(SharedEntry.entry_id == entry.id).values(entry_id=corrected.id)
+    )
+    return corrected

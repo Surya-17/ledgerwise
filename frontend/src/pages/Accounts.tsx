@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Archive, ArchiveRestore, CreditCard, Landmark, Pencil, Plus, TrendingDown, TrendingUp } from 'lucide-react'
+import { Archive, ArchiveRestore, CreditCard, Landmark, Pencil, Plus, TrendingDown, TrendingUp, Users } from 'lucide-react'
 import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
@@ -23,8 +23,9 @@ import { useAccounts } from '../lib/hooks'
 import { formatMoney, parseMoney, todayISO } from '../lib/money'
 import type { Account, AccountType } from '../lib/types'
 
-const SECTIONS: { type: AccountType; title: string; subtitle: string; icon: typeof Landmark }[] = [
+const SECTIONS: { type: AccountType | 'friend'; title: string; subtitle: string; icon: typeof Landmark }[] = [
   { type: 'asset', title: 'Cash & investments', subtitle: 'What you own', icon: Landmark },
+  { type: 'friend', title: 'Friends', subtitle: 'Owed to you (+) or by you (−) from shared bills', icon: Users },
   { type: 'liability', title: 'Credit & loans', subtitle: 'What you owe', icon: CreditCard },
   { type: 'income', title: 'Income categories', subtitle: 'All-time totals', icon: TrendingUp },
   { type: 'expense', title: 'Spending categories', subtitle: 'All-time totals', icon: TrendingDown },
@@ -84,7 +85,8 @@ export default function Accounts() {
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-2">
         {SECTIONS.map(({ type, title, subtitle, icon: Icon }) => {
-          const rows = visible.filter((a) => a.type === type)
+          const rows = visible.filter((a) => (type === 'friend' ? a.kind === 'friend' : a.type === type && a.kind !== 'friend'))
+          if (type === 'friend' && rows.length === 0) return null
           return (
             <Card key={type}>
               <CardHeader

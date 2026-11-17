@@ -14,6 +14,7 @@ const Accounts = lazy(() => import('./pages/Accounts'))
 const Budgets = lazy(() => import('./pages/Budgets'))
 const Import = lazy(() => import('./pages/Import'))
 const Recurring = lazy(() => import('./pages/Recurring'))
+const Shared = lazy(() => import('./pages/Shared'))
 const Activity = lazy(() => import('./pages/Activity'))
 
 const queryClient = new QueryClient({
@@ -55,6 +56,7 @@ function Routed() {
           <Route path="accounts" element={<Accounts />} />
           <Route path="budgets" element={<Budgets />} />
           <Route path="recurring" element={<Recurring />} />
+          <Route path="shared" element={<Shared />} />
           <Route path="import" element={<Import />} />
           <Route path="activity" element={<Activity />} />
           <Route path="*" element={<Navigate to="/" replace />} />

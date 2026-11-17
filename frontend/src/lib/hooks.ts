@@ -9,8 +9,9 @@ export function useAccounts() {
   return { ...q, accounts: q.data ?? [], byId }
 }
 
-/** Real-money accounts (what a person thinks of as "my accounts"). */
-export const isBalanceAccount = (a: Account) => a.type === 'asset' || a.type === 'liability'
+/** Real-money accounts (what a person thinks of as "my accounts"). Friends aren't: you can't pay from one. */
+export const isBalanceAccount = (a: Account) => (a.type === 'asset' || a.type === 'liability') && a.kind !== 'friend'
+export const isFriend = (a: Account) => a.kind === 'friend'
 export const isCategory = (a: Account) => a.type === 'income' || a.type === 'expense'
 
 type Theme = 'light' | 'dark'

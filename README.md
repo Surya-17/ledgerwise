@@ -39,6 +39,7 @@ Because every entry balances, the whole ledger always satisfies the accounting e
 | **Imports are atomic** | If any row fails to parse, nothing is saved and every bad row is reported with its line number. |
 | **Tenant isolation in the schema** | Journal lines reference accounts through a composite FK `(account_id, user_id, currency)`, so the database itself rejects a line that points at another user's account or the wrong currency. |
 | **System accounts can't be forked** | Opening Balance Equity and the Uncategorized fallbacks are found by name by the importer, so they can't be renamed, archived, or impersonated by a new account with a reserved name. |
+| **Split bills never lose a cent** | Splits use the largest-remainder method on integer minor units ($100 three ways is 33.34 / 33.33 / 33.33), so shares always sum to the bill exactly. A Hypothesis property test checks this for arbitrary totals and weights, and the frontend preview uses the same algorithm. |
 | **Every change is audited** | Audit events are written in the same transaction as the change: an audit row exists if and only if the change committed. |
 
 ## The dashboard
@@ -50,6 +51,7 @@ Because every entry balances, the whole ledger always satisfies the accounting e
 | **New transaction** | Expense / income / transfer, optionally **split across categories**, with a live journal preview of the lines that will post. Each form carries one `Idempotency-Key`, so a double-click or retry can't double-post |
 | **Accounts** | Assets, liabilities and categories with computed balances; opening balances post against equity |
 | **Budgets** | Month-by-month limits vs. actuals, status with icon + label (never colour alone), copy from last month |
+| **Shared** | Splitwise-style bill splitting with friends and groups: split equally, by exact amounts or by shares; you or a friend can pay; per-friend and per-group balances; settle up. Each bill is one balanced journal entry (see below) |
 | **Recurring** | Subscriptions, bills and paychecks detected from ledger history, with monthly cost, next expected date, and *lapsed* flags for charges that stopped |
 | **Import** | CSV drag-and-drop with client-side preview, column mapping and date-format detection; shows new, duplicate and transfer-matched rows; categorization rules |
 | **Export** | Accountant-style journal CSV (one row per line, debit/credit columns) for the current filters |
@@ -127,6 +129,11 @@ Interactive docs at `http://localhost:8000/docs` once running.
 | `GET` `PUT` `DELETE` | `/api/budgets` | Monthly budgets and budget-vs-actual |
 | `GET` | `/api/reports/cash-flow`, `/api/reports/net-worth`, `/api/reports/spending` | Monthly reports; spending by category |
 | `GET` | `/api/reports/recurring` | Detected recurring series |
+| `GET` `POST` | `/api/friends` | Friends with running balances (+ they owe you, − you owe them) |
+| `GET` `POST` `PATCH` `DELETE` | `/api/groups` | Friend groups with per-group balances and total spend |
+| `GET` | `/api/shared` | Split bills and settle-ups, filterable by group or friend |
+| `POST` | `/api/shared/expenses` | Split a bill (equal / exact / shares); idempotent |
+| `POST` | `/api/shared/settlements` | Record a friend paying you back, or you paying them; idempotent |
 | `GET` | `/api/audit` | Audit trail |
 
 ## Running locally (Windows)
@@ -198,7 +205,21 @@ CI runs lint, `alembic upgrade head`, `alembic check` (migrations match the mode
 - **Idempotency records are kept indefinitely.** A production system would expire them after ~24 hours with a scheduled cleanup.
 - **One sandbox per demo visitor.** The ledger is append-only, so a shared demo login would let every visitor rewrite everyone's history (and the database triggers would stop anyone from cleaning it up). `POST /api/auth/demo` instead creates a fresh user seeded through the same service layer, rate-limited per IP with a sliding window. The limiter is in-memory, which is correct for one instance; several instances would need Redis. It reads the *last* `X-Forwarded-For` hop, the one the trusted proxy appended, because earlier hops are client-controlled. Demo users are never deleted (the triggers forbid it); a production system would partition them or use `TRUNCATE`-based expiry.
 - **Transfer matching is conservative.** It only merges when the earlier side is still uncategorized and no rule matched the new row, so a $500 rent payment and a coincidental $500 deposit are never merged. The cost is that a transfer whose first side was manually categorized stays as two entries, which the user can fix by recategorizing. Merging happens at import time (not as a background job) so it's atomic with the import and visible in the result.
+- **Shared bills are tracked from your side only.** Friends are private contacts, not users, so a bill Alex paid only records *your* share; what Sam owes Alex isn't your ledger's business. That keeps every entry about your money. Real multi-user groups (everyone logs in and sees one shared tab) would need a separate shared ledger per group, with each member's personal ledger subscribing to it. The model here would carry over unchanged.
 - **Recurring detection is heuristic, not ML.** Group by a normalized merchant key, then require ≥3 occurrences whose gaps fit one cadence (≥75% within tolerance of the median). It's fully explainable, which matters when the output drives "you have a subscription you forgot" prompts. Monthly estimates use exact rational arithmetic (`Fraction`) and round once.
+
+## Shared bills in a double-entry ledger
+
+Each friend is an asset account whose balance is what they owe you; a negative balance is what you owe them. A split bill is then an ordinary balanced entry, so friend balances, net worth, budgets and reports all stay exact:
+
+| You paid $90 dinner on your card, split 3 ways | | Alex paid $90, split 3 ways | |
+|---|---|---|---|
+| Dining (your share) | +30 | Dining (your share) | +30 |
+| Alex | +30 | Alex (you owe him) | −30 |
+| Sam | +30 | | |
+| Visa Card | −90 | | |
+
+Only your share ever becomes spending, so budgets stay honest. Settling up is a transfer between a bank account and the friend's account. Removing a bill posts a reversing entry, like everywhere else. The split's details (payer, method, group) live in a separate `shared_entries` row; the money lives only in journal lines.
 
 ## Roadmap
 
@@ -208,4 +229,5 @@ CI runs lint, `alembic upgrade head`, `alembic check` (migrations match the mode
 - [x] Recurring-transaction detection
 - [x] Transfer matching across imported accounts
 - [x] Journal CSV export
+- [x] Splitwise-style shared bills: friends, groups, equal / exact / share splits, settle up
 - [x] One-image deploy (Docker + Render Blueprint) with per-visitor demo sandboxes

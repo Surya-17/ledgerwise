@@ -14,6 +14,8 @@ export interface Account {
   type: AccountType
   currency: string
   is_archived: boolean
+  /** "friend": what one person owes you (+) or you owe them (−). */
+  kind?: string | null
   balance_minor: number
 }
 
@@ -112,4 +114,35 @@ export interface RecurringSeries {
   next_date: string
   status: 'active' | 'lapsed'
   monthly_minor: number
+}
+
+export interface FriendGroup {
+  id: string
+  name: string
+  member_ids: string[]
+  /** Per friend account id, from this group's bills only: + they owe you, − you owe them. */
+  balances: Record<string, number>
+  total_spent_minor: number
+}
+
+export type SplitMethod = 'equal' | 'exact' | 'shares'
+
+export interface SharedBill {
+  id: string
+  entry_id: string
+  group_id: string | null
+  kind: 'expense' | 'settlement'
+  /** null = you paid. */
+  payer_account_id: string | null
+  total_minor: number
+  currency: string
+  method: SplitMethod | null
+  /** account_id null = you. */
+  shares: { account_id: string | null; amount_minor: number }[]
+  occurred_on: string
+  description: string
+  category_id: string | null
+  my_share_minor: number
+  is_reversed: boolean
+  created_at: string
 }

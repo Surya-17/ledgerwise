@@ -5,12 +5,13 @@ import {
   History,
   LayoutDashboard,
   LogOut,
-  MoreHorizontal,
   Moon,
+  MoreHorizontal,
   PiggyBank,
   Plus,
   Repeat,
   Sun,
+  Users,
   Wallet,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -26,6 +27,7 @@ const NAV = [
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/accounts', label: 'Accounts', icon: Wallet },
   { to: '/budgets', label: 'Budgets', icon: PiggyBank },
+  { to: '/shared', label: 'Shared', icon: Users },
   { to: '/recurring', label: 'Recurring', icon: Repeat },
   { to: '/import', label: 'Import', icon: FileUp },
   { to: '/activity', label: 'Audit log', icon: History },

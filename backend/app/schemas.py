@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import date, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AfterValidator,
@@ -89,6 +89,7 @@ class AccountOut(ORM):
     type: AccountType
     currency: str
     is_archived: bool
+    kind: str | None = None
     balance_minor: int = 0
 
 
@@ -243,4 +244,75 @@ class AuditEventOut(ORM):
     entity_type: str
     entity_id: str
     details: dict[str, Any]
+    created_at: datetime
+
+
+# --- Shared expenses ------------------------------------------------------------------
+
+
+class FriendCreate(BaseModel):
+    name: Name
+
+
+class GroupIn(BaseModel):
+    name: Name | None = None
+    member_ids: list[uuid.UUID] | None = Field(default=None, max_length=50)
+
+
+class GroupOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    member_ids: list[uuid.UUID]
+    # Per friend, from this group's bills only: + they owe you, - you owe them.
+    balances: dict[str, int]
+    total_spent_minor: int
+
+
+class ParticipantIn(BaseModel):
+    account_id: uuid.UUID | None = None  # omit or null for yourself
+    weight: int | None = Field(default=None, ge=1, le=1000)
+    amount_minor: int | None = Field(default=None, ge=0, le=MAX_ABS_MINOR)
+
+
+class SharedExpenseCreate(BaseModel):
+    occurred_on: date
+    description: Text
+    total_minor: PositiveMinorAmount
+    category_id: uuid.UUID
+    payer_id: uuid.UUID | None = None  # null = you paid
+    paid_from_id: uuid.UUID | None = None  # required when you paid
+    group_id: uuid.UUID | None = None
+    method: Literal["equal", "exact", "shares"] = "equal"
+    participants: list[ParticipantIn] = Field(min_length=1, max_length=50)
+
+
+class SettlementCreate(BaseModel):
+    friend_id: uuid.UUID
+    account_id: uuid.UUID
+    amount_minor: PositiveMinorAmount
+    direction: Literal["they_paid", "you_paid"]
+    occurred_on: date
+    group_id: uuid.UUID | None = None
+
+
+class ShareOut(BaseModel):
+    account_id: uuid.UUID | None
+    amount_minor: int
+
+
+class SharedOut(BaseModel):
+    id: uuid.UUID
+    entry_id: uuid.UUID
+    group_id: uuid.UUID | None
+    kind: str
+    payer_account_id: uuid.UUID | None
+    total_minor: int
+    currency: str
+    method: str | None
+    shares: list[ShareOut]
+    occurred_on: date
+    description: str
+    category_id: uuid.UUID | None
+    my_share_minor: int
+    is_reversed: bool
     created_at: datetime

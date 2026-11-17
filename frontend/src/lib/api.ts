@@ -6,10 +6,13 @@ import type {
   CashFlowPoint,
   CategorySpend,
   Entry,
+  FriendGroup,
   ImportBatch,
   NetWorthPoint,
   RecurringSeries,
   Rule,
+  SharedBill,
+  SplitMethod,
   User,
 } from './types'
 
@@ -178,4 +181,40 @@ export const api = {
   spending: (month: string) => request<CategorySpend[]>(`/reports/spending${qs({ month: `${month}-01` })}`),
   recurring: () => request<RecurringSeries[]>('/reports/recurring'),
   audit: (limit = 100, offset = 0) => request<AuditEvent[]>(`/audit${qs({ limit, offset })}`),
+
+  // sharing
+  friends: () => request<Account[]>('/friends'),
+  createFriend: (name: string) => request<Account>('/friends', { method: 'POST', json: { name } }),
+  groups: () => request<FriendGroup[]>('/groups'),
+  createGroup: (name: string, member_ids: string[]) =>
+    request<FriendGroup>('/groups', { method: 'POST', json: { name, member_ids } }),
+  updateGroup: (id: string, body: { name?: string; member_ids?: string[] }) =>
+    request<FriendGroup>(`/groups/${id}`, { method: 'PATCH', json: body }),
+  deleteGroup: (id: string) => request<void>(`/groups/${id}`, { method: 'DELETE' }),
+  shared: (p: { group_id?: string; friend_id?: string } = {}) => request<SharedBill[]>(`/shared${qs(p)}`),
+  createSharedExpense: (body: SharedExpenseInput, idempotencyKey: string) =>
+    request<SharedBill>('/shared/expenses', { method: 'POST', json: body, idempotencyKey }),
+  createSettlement: (
+    body: {
+      friend_id: string
+      account_id: string
+      amount_minor: number
+      direction: 'they_paid' | 'you_paid'
+      occurred_on: string
+      group_id?: string | null
+    },
+    idempotencyKey: string,
+  ) => request<SharedBill>('/shared/settlements', { method: 'POST', json: body, idempotencyKey }),
+}
+
+export interface SharedExpenseInput {
+  occurred_on: string
+  description: string
+  total_minor: number
+  category_id: string
+  payer_id: string | null
+  paid_from_id: string | null
+  group_id: string | null
+  method: SplitMethod
+  participants: { account_id: string | null; weight?: number; amount_minor?: number }[]
 }

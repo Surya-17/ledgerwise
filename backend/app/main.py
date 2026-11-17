@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.config import settings
 from app.deps import DB
 from app.errors import DomainError
-from app.routers import accounts, auth, budgets, entries, imports, reports, rules
+from app.routers import accounts, auth, budgets, entries, imports, reports, rules, sharing
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("ledgerwise")
@@ -103,7 +103,7 @@ def handle_integrity_error(_: Request, exc: IntegrityError) -> JSONResponse:
     )
 
 
-for module in (auth, accounts, entries, imports, rules, budgets, reports):
+for module in (auth, accounts, entries, imports, rules, budgets, reports, sharing):
     app.include_router(module.router, prefix="/api")
 
 
