@@ -4,7 +4,7 @@ A personal finance app built on a **double-entry ledger**, designed with the sam
 
 **Stack:** Python 3.13 · FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL · pytest + Hypothesis · React 19 + TypeScript · TanStack Query · Tailwind · Recharts · Docker · GitHub Actions
 
-**Live demo:** _add your Render URL here_ — click **Try the live demo** for a private sandbox with six months of data, no sign-up.
+**Live demo:** **[ledgerwise-r6pa.onrender.com](https://ledgerwise-r6pa.onrender.com)**: click **Try the live demo** for a private sandbox with six months of data, no sign-up. (Free hosting sleeps when idle, so the first load can take ~30–60 s.)
 
 ![Dashboard](docs/dashboard.png)
 
