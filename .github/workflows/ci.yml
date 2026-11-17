@@ -91,12 +91,19 @@ jobs:
       - name: Smoke test
         run: |
           set -euo pipefail
-          curl -fsS localhost:8000/ | grep -q "<title>Ledgerwise</title>"
-          curl -fsS localhost:8000/transactions | grep -q 'id="root"'  # SPA deep link
-          curl -fsSI localhost:8000/api/health | grep -qi "x-content-type-options: nosniff"
+          # Fetch into variables first: `curl | grep -q` under pipefail fails when grep
+          # exits early and curl gets SIGPIPE.
+          home=$(curl -fsS localhost:8000/)
+          grep -q "<title>Ledgerwise</title>" <<<"$home"
+          deep=$(curl -fsS localhost:8000/transactions)   # SPA deep link
+          grep -q 'id="root"' <<<"$deep"
+          headers=$(curl -fsS -D - -o /dev/null localhost:8000/api/health)
+          grep -qi "x-content-type-options: nosniff" <<<"$headers"
+          grep -qi "content-security-policy:" <<<"$headers"
           TOKEN=$(curl -fsS -X POST localhost:8000/api/auth/demo | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
           curl -fsS -H "Authorization: Bearer $TOKEN" localhost:8000/api/accounts | python3 -c "import sys,json;a=json.load(sys.stdin);assert any(x['name']=='Checking' for x in a),a"
           curl -fsS -H "Authorization: Bearer $TOKEN" localhost:8000/api/reports/recurring | python3 -c "import sys,json;assert len(json.load(sys.stdin))>3"
+          echo "Smoke test passed"
       - name: Logs on failure
         if: failure()
         run: docker logs app || true
