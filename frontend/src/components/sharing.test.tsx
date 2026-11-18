@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Account } from '../lib/types'
+import type { Account, SharedBill } from '../lib/types'
 import { SplitBillModal } from './sharing'
 import { ToastProvider } from './ui'
 
@@ -22,23 +22,25 @@ let accounts: Account[] = []
 
 const createSharedExpense = vi.fn()
 const parseBill = vi.fn()
+const editSharedExpense = vi.fn()
 vi.mock('../lib/api', () => ({
   api: {
     accounts: () => Promise.resolve(accounts),
     friends: () => Promise.resolve(FRIENDS),
     createSharedExpense: (...a: unknown[]) => createSharedExpense(...a),
     parseBill: (...a: unknown[]) => parseBill(...a),
+    editSharedExpense: (...a: unknown[]) => editSharedExpense(...a),
   },
   newIdempotencyKey: () => 'k',
 }))
 
-function renderModal() {
+function renderModal(editing: SharedBill | null = null) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <MemoryRouter>
       <QueryClientProvider client={qc}>
         <ToastProvider>
-          <SplitBillModal open onClose={() => {}} groups={[]} />
+          <SplitBillModal open onClose={() => {}} groups={[]} editing={editing} />
         </ToastProvider>
       </QueryClientProvider>
     </MemoryRouter>,
@@ -50,6 +52,8 @@ beforeEach(() => {
   accounts = [acct('chk', 'Checking', 'asset'), acct('din', 'Dining', 'expense'), ...FRIENDS]
   createSharedExpense.mockReset()
   createSharedExpense.mockResolvedValue({})
+  editSharedExpense.mockReset()
+  editSharedExpense.mockResolvedValue({})
 })
 afterEach(cleanup)
 
@@ -125,6 +129,101 @@ describe('SplitBillModal describe-the-bill', () => {
       { account_id: null, amount_minor: 2300 },
       { account_id: 'm', amount_minor: 2300 },
       { account_id: 's', amount_minor: 2300 },
+    ])
+  })
+})
+
+describe('SplitBillModal other methods', () => {
+  it('splits by percentage and only saves at 100%', async () => {
+    const user = renderModal()
+    await screen.findByLabelText('Include Sravya')
+    await screen.findByRole('option', { name: 'Checking' })
+    await user.type(screen.getByPlaceholderText("Dinner at Joe's"), 'Concert')
+    await user.type(screen.getAllByPlaceholderText('0.00')[0], '200')
+    await user.click(screen.getByLabelText('Include Akhil'))
+    await user.click(screen.getByRole('radio', { name: 'By percentage' }))
+    await user.type(screen.getByLabelText('Percent for You'), '62.5')
+    expect(screen.getByRole('status').textContent).toContain('37.5% left')
+    expect(screen.getByText('Percentages need to add up to 100%')).toBeTruthy()
+    await user.type(screen.getByLabelText('Percent for Akhil'), '37.5')
+    expect(screen.getByTestId('share-Akhil').textContent).toBe('$75.00')
+    await user.click(screen.getByRole('button', { name: 'Save bill' }))
+    await waitFor(() => expect(createSharedExpense).toHaveBeenCalledTimes(1))
+    const body = createSharedExpense.mock.calls[0][0]
+    expect(body.method).toBe('percent')
+    expect(body.participants).toEqual([
+      { account_id: null, percent_bp: 6250 },
+      { account_id: 'a', percent_bp: 3750 },
+    ])
+  })
+
+  it('builds an itemized receipt with tax and tip, total from the items', async () => {
+    const user = renderModal()
+    await screen.findByLabelText('Include Sravya')
+    await screen.findByRole('option', { name: 'Checking' })
+    await user.type(screen.getByPlaceholderText("Dinner at Joe's"), 'Tacos')
+    await user.click(screen.getByLabelText('Include Manasa'))
+    await user.click(screen.getByRole('radio', { name: 'Itemized receipt' }))
+    await user.type(screen.getByLabelText('Item 1 name'), 'Burrito')
+    await user.type(screen.getByLabelText('Item 1 price'), '12')
+    await user.click(screen.getByRole('button', { name: 'Add item' }))
+    await user.type(screen.getByLabelText('Item 2 price'), '9')
+    await user.click(screen.getByLabelText('You had item 2'))
+    await user.type(screen.getByLabelText('Tax, tip & fees'), '4.20')
+    expect(screen.getByTestId('share-You').textContent).toBe('$7.20')
+    expect(screen.getByTestId('share-Manasa').textContent).toBe('$18.00')
+    await user.click(screen.getByRole('button', { name: 'Save bill' }))
+    await waitFor(() => expect(createSharedExpense).toHaveBeenCalledTimes(1))
+    const body = createSharedExpense.mock.calls[0][0]
+    expect(body).toMatchObject({ method: 'itemized', total_minor: 2520, extras_minor: 420 })
+    expect(body.items).toEqual([
+      { name: 'Burrito', amount_minor: 1200, account_ids: [null, 'm'] },
+      { name: 'Item 2', amount_minor: 900, account_ids: ['m'] },
+    ])
+  })
+
+  it('reopens a bill exactly as typed and saves the edit, not a new bill', async () => {
+    const bill: SharedBill = {
+      id: 'bill1',
+      entry_id: 'e1',
+      group_id: null,
+      kind: 'expense',
+      payer_account_id: null,
+      total_minor: 9000,
+      currency: 'USD',
+      method: 'shares',
+      shares: [
+        { account_id: null, amount_minor: 3000 },
+        { account_id: 's', amount_minor: 6000 },
+      ],
+      occurred_on: '2026-11-01',
+      description: 'Groceries',
+      category_id: 'din',
+      my_share_minor: 3000,
+      is_reversed: false,
+      created_at: '',
+      notes: 'Costco run',
+      paid_from_id: 'chk',
+      details: { participants: [{ account_id: null, weight: 1 }, { account_id: 's', weight: 2 }] },
+    }
+    const user = renderModal(bill)
+    expect(await screen.findByText('Edit bill')).toBeTruthy()
+    await screen.findByRole('option', { name: 'Checking' })
+    expect((screen.getByLabelText('Shares for Sravya') as HTMLInputElement).value).toBe('2')
+    expect((screen.getByDisplayValue('Costco run') as HTMLInputElement).value).toBe('Costco run')
+    expect(screen.queryByText('Repeat')).toBeNull() // repeating is set up when adding, not editing
+    const total = screen.getAllByPlaceholderText('0.00')[0]
+    await user.clear(total)
+    await user.type(total, '120')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(editSharedExpense).toHaveBeenCalledTimes(1))
+    expect(createSharedExpense).not.toHaveBeenCalled()
+    const [id, body] = editSharedExpense.mock.calls[0]
+    expect(id).toBe('bill1')
+    expect(body).toMatchObject({ total_minor: 12000, method: 'shares', notes: 'Costco run', occurred_on: '2026-11-01' })
+    expect(body.participants).toEqual([
+      { account_id: null, weight: 1 },
+      { account_id: 's', weight: 2 },
     ])
   })
 })

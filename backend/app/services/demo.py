@@ -154,7 +154,16 @@ def _shared_demo(db: Session, user: User, today: date, *, checking, card, acct) 
     me = sharing.Participant(None)
 
     def bill(
-        days_ago, description, cents, category, *, group=None, payer=None, people, method="equal"
+        days_ago,
+        description,
+        cents,
+        category,
+        *,
+        group=None,
+        payer=None,
+        people,
+        method="equal",
+        **extra,
     ):
         sharing.post_shared_expense(
             db,
@@ -168,12 +177,37 @@ def _shared_demo(db: Session, user: User, today: date, *, checking, card, acct) 
             group_id=group.id if group else None,
             method=method,
             participants=people,
+            **extra,
         )
 
     house = [me, sharing.Participant(f["Alex"]), sharing.Participant(f["Priya"])]
-    for months_ago in (2, 1, 0):
+    for months_ago in (2, 1):
         days = months_ago * 30 + 3
         bill(days, "Spectrum internet", 89_97, "Utilities", group=roommates, people=house)
+    # This month's internet bill is set to repeat, so the next one posts itself.
+    sharing.start_recurring(
+        db,
+        user,
+        first_on=today - timedelta(days=3),
+        cadence="monthly",
+        body={
+            "description": "Spectrum internet",
+            "total_minor": 89_97,
+            "category_id": str(acct["Utilities"].id),
+            "payer_id": None,
+            "paid_from_id": str(card),
+            "group_id": str(roommates.id),
+            "method": "equal",
+            "participants": [
+                {"account_id": None},
+                {"account_id": str(f["Alex"])},
+                {"account_id": str(f["Priya"])},
+            ],
+            "items": [],
+            "extras_minor": 0,
+            "notes": "Autopay on the 1st",
+        },
+    )
     bill(
         26,
         "Costco: paper towels, coffee",
@@ -186,7 +220,16 @@ def _shared_demo(db: Session, user: User, today: date, *, checking, card, acct) 
     bill(9, "Cleaning supplies", 31_20, "Shopping", group=roommates, payer=f["Alex"], people=house)
 
     crew = [me, *(sharing.Participant(f[n]) for n in ("Alex", "Sam", "Jordan"))]
-    bill(40, "Cabin rental, 3 nights", 960_00, "Travel", group=trip, payer=f["Sam"], people=crew)
+    bill(
+        40,
+        "Cabin rental, 3 nights",
+        960_00,
+        "Travel",
+        group=trip,
+        payer=f["Sam"],
+        people=crew,
+        notes="Booked on Airbnb; includes the cleaning fee",
+    )
     bill(39, "Lift tickets", 516_00, "Travel", group=trip, people=crew)
     bill(
         38,
@@ -213,6 +256,25 @@ def _shared_demo(db: Session, user: User, today: date, *, checking, card, acct) 
             sharing.Participant(None, amount_minor=96_40),
             sharing.Participant(f["Priya"], amount_minor=90_00),
         ],
+    )
+
+    # An itemized receipt: each dish split between whoever had it, tax and tip spread
+    # in proportion. 18 + 24 + 26 + 12 = 80.00 of food, 14.40 tax and tip.
+    sam, jordan = f["Sam"], f["Jordan"]
+    bill(
+        6,
+        "Sushi at Kaze",
+        94_40,
+        "Dining",
+        method="itemized",
+        people=[me, sharing.Participant(sam), sharing.Participant(jordan)],
+        items=[
+            sharing.Item("Dragon roll", 18_00, (None, sam)),
+            sharing.Item("Omakase", 24_00, (None,)),
+            sharing.Item("Sashimi platter", 26_00, (sam, jordan)),
+            sharing.Item("Sake", 12_00, (None, sam, jordan)),
+        ],
+        extras_minor=14_40,
     )
 
     for friend, cents, direction, days_ago, group in [

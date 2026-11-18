@@ -272,6 +272,17 @@ class ParticipantIn(BaseModel):
     account_id: uuid.UUID | None = None  # omit or null for yourself
     weight: int | None = Field(default=None, ge=1, le=1000)
     amount_minor: int | None = Field(default=None, ge=0, le=MAX_ABS_MINOR)
+    percent_bp: int | None = Field(default=None, ge=0, le=10_000)  # 12.5% = 1250
+    adjust_minor: MinorAmount | None = None
+
+
+class ItemIn(BaseModel):
+    name: Name
+    amount_minor: PositiveMinorAmount
+    account_ids: list[uuid.UUID | None] = Field(min_length=1, max_length=50)
+
+
+SplitMethod = Literal["equal", "exact", "shares", "percent", "adjust", "itemized"]
 
 
 class SharedExpenseCreate(BaseModel):
@@ -282,8 +293,18 @@ class SharedExpenseCreate(BaseModel):
     payer_id: uuid.UUID | None = None  # null = you paid
     paid_from_id: uuid.UUID | None = None  # required when you paid
     group_id: uuid.UUID | None = None
-    method: Literal["equal", "exact", "shares"] = "equal"
+    method: SplitMethod = "equal"
     participants: list[ParticipantIn] = Field(min_length=1, max_length=50)
+    # Itemized bills: the items, plus tax/tip/fees (negative for a discount).
+    items: list[ItemIn] = Field(default_factory=list, max_length=100)
+    extras_minor: MinorAmount = 0
+    notes: str | None = Field(default=None, max_length=1000)
+    # Post this bill now and again every week/month (only when creating, not editing).
+    repeat: Literal["weekly", "monthly"] | None = None
+
+    def template(self) -> dict[str, Any]:
+        """The bill without its date: what an edit or a repeating bill re-posts."""
+        return self.model_dump(mode="json", exclude={"occurred_on", "repeat"})
 
 
 class BillTextIn(BaseModel):
@@ -320,3 +341,29 @@ class SharedOut(BaseModel):
     my_share_minor: int
     is_reversed: bool
     created_at: datetime
+    notes: str | None = None
+    details: dict[str, Any] | None = None
+    paid_from_id: uuid.UUID | None = None
+    edited_from_id: uuid.UUID | None = None
+    recurring_id: uuid.UUID | None = None
+
+
+class RecurringBillOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    description: str
+    cadence: str
+    next_on: date
+    is_active: bool
+    template: dict[str, Any]
+
+
+class GroupSummaryOut(BaseModel):
+    total_spent_minor: int
+    my_share_minor: int
+    bill_count: int
+    # "me" or a friend's account id -> what they paid for the group's bills
+    paid_by: dict[str, int]
+    my_share_by_category: dict[str, int]
+    by_month: dict[str, int]

@@ -234,7 +234,7 @@ export function Segmented<T extends string>({
 }: {
   value: T
   onChange: (v: T) => void
-  options: { value: T; label: string }[]
+  options: { value: T; label: string; title?: string }[]
 }) {
   return (
     <div className="inline-flex rounded-lg bg-surface-2 p-0.5" role="radiogroup">
@@ -244,6 +244,8 @@ export function Segmented<T extends string>({
           type="button"
           role="radio"
           aria-checked={value === o.value}
+          aria-label={o.title}
+          title={o.title}
           onClick={() => onChange(o.value)}
           className={clsx(
             'rounded-md px-3 py-1.5 text-[13px] font-medium transition',

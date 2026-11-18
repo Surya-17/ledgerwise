@@ -11,7 +11,15 @@ from sqlalchemy.orm import selectinload
 
 from app.deps import DB, CurrentUser, IdempotencyKey
 from app.errors import LedgerError
-from app.models import Account, AccountType, FriendGroup, JournalEntry, SharedEntry, User
+from app.models import (
+    Account,
+    AccountType,
+    FriendGroup,
+    JournalEntry,
+    SharedEntry,
+    SharedRecurring,
+    User,
+)
 from app.ratelimit import SlidingWindowLimiter
 from app.schemas import (
     AccountOut,
@@ -19,6 +27,8 @@ from app.schemas import (
     FriendCreate,
     GroupIn,
     GroupOut,
+    GroupSummaryOut,
+    RecurringBillOut,
     SettlementCreate,
     SharedExpenseCreate,
     SharedOut,
@@ -109,6 +119,17 @@ def _shared_out(
         None,
     )
     my_share = next((s["amount_minor"] for s in shared.shares if s["account_id"] is None), 0)
+    paid_from = None
+    if shared.kind == "expense" and shared.payer_account_id is None:
+        paid_from = next(
+            (
+                ln.account_id
+                for ln in entry.lines
+                if ln.amount_minor == -shared.total_minor
+                and types.get(ln.account_id) in (AccountType.ASSET, AccountType.LIABILITY)
+            ),
+            None,
+        )
     return SharedOut(
         id=shared.id,
         entry_id=entry.id,
@@ -125,6 +146,11 @@ def _shared_out(
         my_share_minor=my_share,
         is_reversed=reversed_,
         created_at=shared.created_at,
+        notes=shared.notes,
+        details=shared.details,
+        paid_from_id=paid_from,
+        edited_from_id=shared.edited_from_id,
+        recurring_id=shared.recurring_id,
     ).model_dump(mode="json")
 
 
@@ -184,27 +210,42 @@ def create_shared_expense(
     """Split a bill. Send an `Idempotency-Key` header to make retries safe."""
 
     def action() -> dict[str, Any]:
-        shared = sharing.post_shared_expense(
-            db,
-            user,
-            occurred_on=body.occurred_on,
-            description=body.description,
-            total_minor=body.total_minor,
-            category_id=body.category_id,
-            payer_id=body.payer_id,
-            paid_from_id=body.paid_from_id,
-            group_id=body.group_id,
-            method=body.method,
-            participants=[
-                sharing.Participant(p.account_id, p.weight, p.amount_minor)
-                for p in body.participants
-            ],
-        )
+        if body.repeat:
+            _, shared = sharing.start_recurring(
+                db, user, body=body.template(), first_on=body.occurred_on, cadence=body.repeat
+            )
+        else:
+            shared = sharing.post_shared_expense(
+                db, user, occurred_on=body.occurred_on, **sharing.expense_kwargs(body.template())
+            )
         entry = db.get(JournalEntry, shared.entry_id)
         return _shared_out(shared, entry, _types(db, user), False)
 
     payload = {"op": "shared_expense", **body.model_dump(mode="json")}
     return run_idempotent(db, user.id, idempotency_key, payload, action)
+
+
+@router.put("/shared/expenses/{shared_id}", responses={200: {"model": SharedOut}})
+def edit_shared_expense(
+    shared_id: uuid.UUID,
+    body: SharedExpenseCreate,
+    db: DB,
+    user: CurrentUser,
+    idempotency_key: IdempotencyKey = None,
+) -> JSONResponse:
+    """Change a bill. The old one is reversed and the new one posted, atomically."""
+    if body.repeat:
+        raise LedgerError("Set up repeating when you add a bill, not when you edit one")
+
+    def action() -> dict[str, Any]:
+        shared = sharing.edit_shared_expense(
+            db, user, shared_id, occurred_on=body.occurred_on, body=body.template()
+        )
+        entry = db.get(JournalEntry, shared.entry_id)
+        return _shared_out(shared, entry, _types(db, user), False)
+
+    payload = {"op": "shared_edit", "id": str(shared_id), **body.model_dump(mode="json")}
+    return run_idempotent(db, user.id, idempotency_key, payload, action, status_code=200)
 
 
 @router.post("/shared/settlements", status_code=201, responses={201: {"model": SharedOut}})
@@ -276,3 +317,39 @@ def parse_bill(body: BillTextIn, db: DB, user: CurrentUser) -> bill_parser.BillD
     if bill_parser.ai_enabled():
         parse_limiter.check_and_hit(str(user.id))
     return bill_parser.parse_bill(body.text, _parse_context(db, user))
+
+
+# --- Repeating bills ------------------------------------------------------------------
+
+
+@router.get("/shared/recurring", response_model=list[RecurringBillOut])
+def list_recurring(db: DB, user: CurrentUser) -> list[SharedRecurring]:
+    return list(
+        db.scalars(
+            select(SharedRecurring)
+            .where(SharedRecurring.user_id == user.id, SharedRecurring.is_active.is_(True))
+            .order_by(SharedRecurring.next_on)
+        )
+    )
+
+
+@router.post("/shared/recurring/run")
+def run_recurring(db: DB, user: CurrentUser) -> dict[str, int]:
+    """Post every repeating bill that has come due. Safe to call any number of times."""
+    posted = sharing.post_due_bills(db, user, date.today())
+    db.commit()
+    return {"posted": len(posted)}
+
+
+@router.post("/shared/recurring/{recurring_id}/stop", response_model=RecurringBillOut)
+def stop_recurring(recurring_id: uuid.UUID, db: DB, user: CurrentUser) -> SharedRecurring:
+    """Stop repeating. Bills already posted stay."""
+    rec = sharing.stop_recurring(db, user, recurring_id)
+    db.commit()
+    return rec
+
+
+@router.get("/groups/{group_id}/summary", response_model=GroupSummaryOut)
+def group_summary(group_id: uuid.UUID, db: DB, user: CurrentUser) -> dict[str, Any]:
+    sharing.get_group(db, user, group_id)
+    return sharing.group_summary(db, user, group_id)

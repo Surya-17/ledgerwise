@@ -105,6 +105,18 @@ def test_category_hints_match_whole_words() -> None:
     assert cabin.category_id == TRAVEL
 
 
+def test_percentages_and_the_rest() -> None:
+    d = parse("Concert 200: Alex 25%, Priya 25%, me 50%")
+    assert d.method == "percent" and d.total_minor == 20000
+    assert {p.account_id: p.percent_bp for p in d.participants} == {
+        None: 5000,
+        ALEX: 2500,
+        PRIYA: 2500,
+    }
+    d = parse("Hotel 300 with Alex 40%, rest is mine")
+    assert {p.account_id: p.percent_bp for p in d.participants} == {None: 6000, ALEX: 4000}
+
+
 def test_shares_and_relative_dates() -> None:
     d = parse("Lift tickets $300 yesterday, Sam x2, Alex 1 share, me")
     assert d.method == "shares"

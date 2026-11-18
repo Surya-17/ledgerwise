@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 ME = "me"
 _ME_WORDS = {"me", "i", "myself", "you", "my", "mine", "self", "yourself"}
 
-Method = Literal["equal", "exact", "shares"]
+Method = Literal["equal", "exact", "shares", "percent"]
 
 
 # --- What both extractors produce -----------------------------------------------------
@@ -51,6 +51,7 @@ class RawPerson(BaseModel):
     name: str
     amount: str | None = None  # their exact share, as written ("23", "23.50")
     shares: int | None = None  # their weight when split by shares
+    percent: str | None = None  # their percentage, as written ("40", "12.5")
 
 
 class RawBill(BaseModel):
@@ -91,6 +92,7 @@ class DraftPerson(BaseModel):
     account_id: uuid.UUID | None  # None = you
     weight: int | None = None
     amount_minor: int | None = None
+    percent_bp: int | None = None
 
 
 class BillDraft(BaseModel):
@@ -151,6 +153,9 @@ _AMOUNT_AFTER = re.compile(
     r"^\s*(?:'s(?:\s+share)?|:|=|-|\u2013|\u2014|owes?|share|had|ordered|got|is|was|pays?)?"
     rf"\s*(?:is\s+)?({_AMOUNT})",
     re.I,
+)
+_PCT_AFTER = re.compile(
+    r"^\s*(?:'s(?:\s+share)?|:|=|-|share|pays?|is)?\s*(\d{1,3}(?:\.\d{1,2})?)\s*%"
 )
 _PAYER_AFTER = re.compile(
     r"^\s*(?:paid|covered|picked up|fronted|got the bill|got it|bought|put it on)", re.I
@@ -301,11 +306,16 @@ def rule_extract(text: str, ctx: Context) -> RawBill:
     # Amounts and shares attached to a person ("Alex 20", "Sam's share $15", "Priya x2").
     attached: dict[str, str] = {}
     weights: dict[str, int] = {}
+    pcts: dict[str, str] = {}
     used_spans: list[tuple[int, int]] = []
     for mt in mentions:
         if mt.key.startswith("g:"):
             continue
         after = text[mt.end : mt.end + 30]
+        if (m := _PCT_AFTER.match(after)) is not None:
+            pcts[mt.key] = m[1]
+            used_spans.append((mt.end, mt.end + m.end()))
+            continue
         if (m := _SHARES_AFTER.match(after)) is not None:
             weights[mt.key] = int(m[1] or m[2])
             used_spans.append((mt.end, mt.end + m.end()))
@@ -339,6 +349,8 @@ def rule_extract(text: str, ctx: Context) -> RawBill:
         raw.total = attached.popitem()[1]
     if attached:
         raw.method = "exact"
+    elif pcts:
+        raw.method = "percent"
     elif weights:
         raw.method = "shares"
 
@@ -365,6 +377,7 @@ def rule_extract(text: str, ctx: Context) -> RawBill:
                 name="me" if key == ME else names[key],
                 amount=attached.get(key),
                 shares=weights.get(key),
+                percent=pcts.get(key),
             )
         )
     raw.exclude = ["me" if k == ME else names[k] for k in excluded if k == ME or k in names]
@@ -437,8 +450,10 @@ Use only names from the lists given. Write "me" for the user (I, me, my, myself)
   "me" unless the note says the user is not part of it. If a group is named and no one is
   excluded, list every member of the group plus "me".
 - method: "exact" when amounts per person are given, "shares" for ratios like 2:1 or
-  "Alex x2", otherwise "equal". For "exact", put each person's amount; if one person's
-  amount is implied ("rest is mine"), compute it. For "shares", put integer shares.
+  "Alex x2", "percent" when given as % (e.g. "Alex 40%"), otherwise "equal".
+  For "exact", put each person's amount; if one person's amount is implied ("rest is
+  mine"), compute it. For "shares", put integer shares. For "percent", put each
+  percentage as a decimal string ("40", "12.5").
 - category and paid_from: pick the closest from the lists, or null.
 - date: YYYY-MM-DD if the note mentions one (today is {today}), else null.
 - description: a short title like "Dinner at Joe's" or "Groceries", not a sentence.
@@ -466,6 +481,7 @@ def _schema() -> dict[str, Any]:
                         "name": {"type": "STRING"},
                         "amount": s,
                         "shares": {"type": "INTEGER", "nullable": True},
+                        "percent": s,
                     },
                     "required": ["name"],
                 },
@@ -543,6 +559,18 @@ def _minor(value: str | None, currency: str) -> int | None:
     return minor if minor > 0 else (0 if minor == 0 else None)
 
 
+def _percent_bp(value: str | None) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        bp = Decimal(str(value).strip().rstrip("%")) * 100
+    except InvalidOperation:
+        return None
+    if bp != bp.to_integral_value() or not 0 <= bp <= 10_000:
+        return None
+    return int(bp)
+
+
 def resolve(raw: RawBill, ctx: Context, source: Literal["ai", "rules"]) -> BillDraft:
     draft = BillDraft(source=source)
     notes = draft.notes
@@ -604,8 +632,14 @@ def resolve(raw: RawBill, ctx: Context, source: Literal["ai", "rules"]) -> BillD
 
     amounts = [_minor(p.amount, ctx.currency) for _, p in people]
     weights = [p.shares if p.shares and 0 < p.shares <= 1000 else None for _, p in people]
+    pct = [_percent_bp(p.percent) for _, p in people]
     method: Method = raw.method or "equal"
-    if any(a is not None for a in amounts) and method != "shares":
+    if any(x is not None for x in pct) and method not in ("exact", "shares"):
+        method = "percent"
+        missing = [i for i, x in enumerate(pct) if x is None]
+        if len(missing) == 1:  # "Alex 40%, rest is mine"
+            pct[missing[0]] = max(0, 10_000 - sum(x for x in pct if x is not None))
+    elif any(a is not None for a in amounts) and method != "shares":
         method = "exact"
     elif any(w is not None for w in weights) and method != "exact":
         method = "shares"
@@ -628,6 +662,7 @@ def resolve(raw: RawBill, ctx: Context, source: Literal["ai", "rules"]) -> BillD
             account_id=pid,
             weight=(weights[i] or 1) if method == "shares" else None,
             amount_minor=(amounts[i] or 0) if method == "exact" else None,
+            percent_bp=(pct[i] or 0) if method == "percent" else None,
         )
         for i, (pid, _) in enumerate(people)
     ]

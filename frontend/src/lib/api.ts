@@ -8,10 +8,14 @@ import type {
   CategorySpend,
   Entry,
   FriendGroup,
+  GroupSummary,
   ImportBatch,
   NetWorthPoint,
+  RecurringBill,
   RecurringSeries,
   Rule,
+  BillItem,
+  BillParticipantInput,
   SharedBill,
   SplitMethod,
   User,
@@ -195,6 +199,12 @@ export const api = {
   shared: (p: { group_id?: string; friend_id?: string } = {}) => request<SharedBill[]>(`/shared${qs(p)}`),
   createSharedExpense: (body: SharedExpenseInput, idempotencyKey: string) =>
     request<SharedBill>('/shared/expenses', { method: 'POST', json: body, idempotencyKey }),
+  editSharedExpense: (id: string, body: SharedExpenseInput, idempotencyKey: string) =>
+    request<SharedBill>(`/shared/expenses/${id}`, { method: 'PUT', json: body, idempotencyKey }),
+  recurringBills: () => request<RecurringBill[]>('/shared/recurring'),
+  runRecurringBills: () => request<{ posted: number }>('/shared/recurring/run', { method: 'POST' }),
+  stopRecurringBill: (id: string) => request<RecurringBill>(`/shared/recurring/${id}/stop`, { method: 'POST' }),
+  groupSummary: (id: string) => request<GroupSummary>(`/groups/${id}/summary`),
   parseBill: (text: string) => request<BillDraft>('/shared/parse', { method: 'POST', json: { text } }),
   createSettlement: (
     body: {
@@ -218,5 +228,9 @@ export interface SharedExpenseInput {
   paid_from_id: string | null
   group_id: string | null
   method: SplitMethod
-  participants: { account_id: string | null; weight?: number; amount_minor?: number }[]
+  participants: BillParticipantInput[]
+  items?: BillItem[]
+  extras_minor?: number
+  notes?: string | null
+  repeat?: 'weekly' | 'monthly' | null
 }

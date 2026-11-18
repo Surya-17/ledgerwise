@@ -39,7 +39,7 @@ Because every entry balances, the whole ledger always satisfies the accounting e
 | **Imports are atomic** | If any row fails to parse, nothing is saved and every bad row is reported with its line number. |
 | **Tenant isolation in the schema** | Journal lines reference accounts through a composite FK `(account_id, user_id, currency)`, so the database itself rejects a line that points at another user's account or the wrong currency. |
 | **System accounts can't be forked** | Opening Balance Equity and the Uncategorized fallbacks are found by name by the importer, so they can't be renamed, archived, or impersonated by a new account with a reserved name. |
-| **Split bills never lose a cent** | Splits use the largest-remainder method on integer minor units ($100 three ways is 33.34 / 33.33 / 33.33), so shares always sum to the bill exactly. A Hypothesis property test checks this for arbitrary totals and weights, and the frontend preview uses the same algorithm. |
+| **Split bills never lose a cent** | Splits use the largest-remainder method on integer minor units ($100 three ways is 33.34 / 33.33 / 33.33), so shares always sum to the bill exactly. Itemized receipts split each item among whoever had it, then spread tax and tip by subtotal with the same method. Hypothesis property tests check both for arbitrary inputs, and the frontend preview mirrors the server's algorithm. |
 | **Every change is audited** | Audit events are written in the same transaction as the change: an audit row exists if and only if the change committed. |
 
 ## The dashboard
@@ -51,7 +51,7 @@ Because every entry balances, the whole ledger always satisfies the accounting e
 | **New transaction** | Expense / income / transfer, optionally **split across categories**, with a live journal preview of the lines that will post. Each form carries one `Idempotency-Key`, so a double-click or retry can't double-post |
 | **Accounts** | Assets, liabilities and categories with computed balances; opening balances post against equity |
 | **Budgets** | Month-by-month limits vs. actuals, status with icon + label (never colour alone), copy from last month |
-| **Shared** | Splitwise-style bill splitting with friends and groups: split equally, by exact amounts or by shares; you or a friend can pay; per-friend and per-group balances; settle up. Each bill is one balanced journal entry (see below) |
+| **Shared** | Splitwise-style bill splitting with friends and groups. Six ways to split: equally, exact amounts, percentages, shares, equal-with-adjustments, and itemized receipts with tax and tip. You or a friend can pay. Notes, editing (reverse + repost), weekly/monthly repeating bills, per-friend and per-group balances, group totals (who paid, your share by category), settle up, copy-a-reminder, CSV export, and "describe the bill" to fill the form. Each bill is one balanced journal entry (see below) |
 | **Recurring** | Subscriptions, bills and paychecks detected from ledger history, with monthly cost, next expected date, and *lapsed* flags for charges that stopped |
 | **Import** | CSV drag-and-drop with client-side preview, column mapping and date-format detection; shows new, duplicate and transfer-matched rows; categorization rules |
 | **Export** | Accountant-style journal CSV (one row per line, debit/credit columns) for the current filters |
@@ -131,8 +131,11 @@ Interactive docs at `http://localhost:8000/docs` once running.
 | `GET` | `/api/reports/recurring` | Detected recurring series |
 | `GET` `POST` | `/api/friends` | Friends with running balances (+ they owe you, − you owe them) |
 | `GET` `POST` `PATCH` `DELETE` | `/api/groups` | Friend groups with per-group balances and total spend |
+| `GET` | `/api/groups/{id}/summary` | Group totals: spent, your share, who paid, your share by category, by month |
 | `GET` | `/api/shared` | Split bills and settle-ups, filterable by group or friend |
-| `POST` | `/api/shared/expenses` | Split a bill (equal / exact / shares); idempotent |
+| `POST` | `/api/shared/expenses` | Split a bill (equal / exact / percent / shares / adjust / itemized), optionally repeating weekly or monthly; idempotent |
+| `PUT` | `/api/shared/expenses/{id}` | Edit a bill: reverses the old entry and posts the new one atomically; idempotent |
+| `GET` `POST` | `/api/shared/recurring`, `/api/shared/recurring/run`, `/api/shared/recurring/{id}/stop` | Repeating bills: list, post what's due (safe to repeat), stop |
 | `POST` | `/api/shared/parse` | Turn "Dinner $90 with Alex and Sam, I paid" into a draft for the split form (nothing is saved) |
 | `POST` | `/api/shared/settlements` | Record a friend paying you back, or you paying them; idempotent |
 | `GET` | `/api/audit` | Audit trail |
@@ -222,7 +225,11 @@ Each friend is an asset account whose balance is what they owe you; a negative b
 | Sam | +30 | | |
 | Visa Card | −90 | | |
 
-Only your share ever becomes spending, so budgets stay honest. Settling up is a transfer between a bank account and the friend's account. Removing a bill posts a reversing entry, like everywhere else. The split's details (payer, method, group) live in a separate `shared_entries` row; the money lives only in journal lines.
+Only your share ever becomes spending, so budgets stay honest. Settling up is a transfer between a bank account and the friend's account. Removing a bill posts a reversing entry, like everywhere else. The split's details (payer, method, group, notes, what was typed) live in a separate `shared_entries` row; the money lives only in journal lines.
+
+- **Editing never rewrites history.** `PUT /shared/expenses/{id}` reverses the old entry and posts the corrected one in the same transaction, linked by `edited_from_id`. The bill keeps the inputs as typed (shares, percentages, items), so it reopens exactly as entered rather than as derived cents.
+- **Repeating bills are posted on demand, exactly once.** There's no cron on a free host that sleeps. Instead, opening Shared calls `POST /shared/recurring/run`, which posts every occurrence that's due (catching up missed months). Each occurrence is a normal bill with `(recurring_id, occurrence_on)` unique, so two tabs racing lose at the constraint instead of double-posting. Monthly bills keep their day: the 31st becomes Feb 28, then Mar 31. A bill that can no longer post (say, a friend was removed) stops and leaves an audit record instead of guessing.
+- **Itemized receipts are exact.** Each item is split equally among the people who had it. Tax, tip and fees (or a discount) are then spread in proportion to each person's subtotal, using largest-remainder on cents, so the shares always sum to the receipt.
 
 ### Describe a bill, get a filled form
 
@@ -241,5 +248,5 @@ The split form takes a sentence like *"Cabin 600 on Tahoe ski trip except Jordan
 - [x] Recurring-transaction detection
 - [x] Transfer matching across imported accounts
 - [x] Journal CSV export
-- [x] Splitwise-style shared bills: friends, groups, equal / exact / share splits, settle up
+- [x] Splitwise-style shared bills: friends, groups, six split methods incl. itemized receipts, edits, repeating bills, group totals, settle up, reminders, CSV export
 - [x] One-image deploy (Docker + Render Blueprint) with per-visitor demo sandboxes

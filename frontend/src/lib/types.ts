@@ -125,7 +125,42 @@ export interface FriendGroup {
   total_spent_minor: number
 }
 
-export type SplitMethod = 'equal' | 'exact' | 'shares'
+export type SplitMethod = 'equal' | 'exact' | 'shares' | 'percent' | 'adjust' | 'itemized'
+
+export interface BillParticipantInput {
+  account_id: string | null
+  weight?: number | null
+  amount_minor?: number | null
+  /** basis points: 12.5% = 1250 */
+  percent_bp?: number | null
+  adjust_minor?: number | null
+}
+
+export interface BillItem {
+  name: string
+  amount_minor: number
+  /** null = you */
+  account_ids: (string | null)[]
+}
+
+export interface RecurringBill {
+  id: string
+  description: string
+  cadence: 'weekly' | 'monthly'
+  next_on: string
+  is_active: boolean
+  template: { total_minor: number; group_id: string | null; payer_id: string | null; participants: BillParticipantInput[] }
+}
+
+export interface GroupSummary {
+  total_spent_minor: number
+  my_share_minor: number
+  bill_count: number
+  /** "me" or a friend's account id */
+  paid_by: Record<string, number>
+  my_share_by_category: Record<string, number>
+  by_month: Record<string, number>
+}
 
 /** A split-bill form filled from a sentence. Nothing is saved until the user submits. */
 export interface BillDraft {
@@ -138,7 +173,7 @@ export interface BillDraft {
   category_id: string | null
   group_id: string | null
   method: SplitMethod
-  participants: { account_id: string | null; weight: number | null; amount_minor: number | null }[]
+  participants: { account_id: string | null; weight: number | null; amount_minor: number | null; percent_bp?: number | null }[]
   notes: string[]
 }
 
@@ -160,4 +195,10 @@ export interface SharedBill {
   my_share_minor: number
   is_reversed: boolean
   created_at: string
+  notes?: string | null
+  /** What was typed: per-person inputs, and items for itemized bills. */
+  details?: { participants?: BillParticipantInput[]; items?: BillItem[]; extras_minor?: number } | null
+  paid_from_id?: string | null
+  edited_from_id?: string | null
+  recurring_id?: string | null
 }

@@ -31,6 +31,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -259,6 +260,28 @@ class FriendGroupMember(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class SharedRecurring(Base):
+    """A split bill that repeats (rent, internet). Due occurrences are posted on demand.
+
+    `template` is the bill as the API received it, minus the date. Each posted
+    occurrence is a normal SharedEntry with (recurring_id, occurrence_on) unique, so
+    two concurrent "post what's due" calls can never double-post a month.
+    """
+
+    __tablename__ = "shared_recurring"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    description: Mapped[str] = mapped_column(String(500))
+    template: Mapped[dict[str, Any]] = mapped_column(JSON)
+    cadence: Mapped[str] = mapped_column(String(16))  # weekly | monthly
+    # Monthly bills keep their day of month: 31 -> Feb 28 -> Mar 31.
+    anchor_day: Mapped[int] = mapped_column(Integer)
+    next_on: Mapped[date] = mapped_column(Date)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class SharedEntry(Base):
     """Split details for a journal entry: who paid, who shared, how it was divided.
 
@@ -267,7 +290,10 @@ class SharedEntry(Base):
     """
 
     __tablename__ = "shared_entries"
-    __table_args__ = (Index("ix_shared_entries_user_id_group_id", "user_id", "group_id"),)
+    __table_args__ = (
+        Index("ix_shared_entries_user_id_group_id", "user_id", "group_id"),
+        UniqueConstraint("recurring_id", "occurrence_on"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
@@ -283,4 +309,13 @@ class SharedEntry(Base):
     method: Mapped[str | None] = mapped_column(String(16))  # equal | exact | shares
     # [{"account_id": uuid | null (you), "amount_minor": int}] for every participant.
     shares: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    notes: Mapped[str | None] = mapped_column(Text)
+    # Itemized bills: {"items": [{"name", "amount_minor", "account_ids"}], "extras_minor"}.
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # Set when this bill replaced an edited one (the old one is reversed).
+    edited_from_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("shared_entries.id"))
+    recurring_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("shared_recurring.id", ondelete="SET NULL")
+    )
+    occurrence_on: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
